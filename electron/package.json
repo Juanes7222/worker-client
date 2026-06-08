@@ -1,0 +1,61 @@
+{
+  "name": "lavoz-worker-installer",
+  "version": "1.0.0",
+  "description": "Instalador del worker de La Voz de la Verdad",
+  "author": "La Voz de la Verdad",
+  "main": "src/main.ts",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder build --win --x64"
+  },
+  "build": {
+    "appId": "com.lavozverdad.worker",
+    "productName": "La Voz de la Verdad - Worker",
+    "copyright": "La Voz de la Verdad",
+    "directories": {
+      "buildResources": "../resources",
+      "output": "dist"
+    },
+    "files": [
+      {
+        "from": ".",
+        "to": ".",
+        "filter": [
+          "src/**/*",
+          "package.json"
+        ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "../worker/dist",
+        "to": "worker-dist"
+      },
+      {
+        "from": "../worker/package.json",
+        "to": "worker-dist/package.json"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "../resources/icon.ico",
+      "requestedExecutionLevel": "requireAdministrator"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": false,
+      "installerIcon": "../resources/icon.ico",
+      "uninstallerIcon": "../resources/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "La Voz Worker"
+    }
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  },
+  "devDependencies": {
+    "electron": "^42.3.3",
+    "electron-builder": "^24.13.3"
+  }
+}

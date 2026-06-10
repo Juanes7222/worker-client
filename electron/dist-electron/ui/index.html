@@ -1,0 +1,504 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline';">
+<title>La Voz de la Verdad — Worker</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg:        #0b0b0b;
+    --surface:   #141414;
+    --border:    #252525;
+    --border-hi: #333;
+    --accent:    #d4a843;
+    --accent-dim:#8a6b28;
+    --text:      #e8e4dc;
+    --muted:     #5a5650;
+    --success:   #4a9e6b;
+    --danger:    #c45e4a;
+    --info:      #5a8bbf;
+    --mono:      'IBM Plex Mono', monospace;
+    --sans:      'IBM Plex Sans', sans-serif;
+  }
+
+  html, body { height: 100%; background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 13px; user-select: none; }
+
+  /* titlebar */
+  .titlebar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 16px; height: 40px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    -webkit-app-region: drag;
+  }
+  .titlebar-brand { display: flex; align-items: center; gap: 10px; }
+  .titlebar-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 6px var(--accent-dim);
+  }
+  .titlebar-name { font-family: var(--mono); font-size: 11px; color: var(--muted); letter-spacing: 0.08em; }
+  .titlebar-controls { display: flex; gap: 8px; -webkit-app-region: no-drag; }
+  .titlebar-btn {
+    width: 28px; height: 28px; border: none; border-radius: 4px;
+    background: transparent; color: var(--muted); cursor: pointer;
+    font-size: 14px; display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .titlebar-btn:hover { background: var(--border); color: var(--text); }
+  .titlebar-btn.close:hover { background: #5c2020; color: #e87070; }
+
+  /* layout */
+  .layout { display: flex; height: calc(100vh - 40px); }
+
+  /* sidebar */
+  .sidebar {
+    width: 180px; flex-shrink: 0;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    display: flex; flex-direction: column;
+    padding: 20px 0;
+  }
+  .sidebar-nav { flex: 1; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 20px; cursor: pointer;
+    font-size: 12px; color: var(--muted);
+    border-left: 2px solid transparent;
+    transition: all 0.15s;
+  }
+  .nav-item:hover { color: var(--text); background: rgba(255,255,255,0.03); }
+  .nav-item.active { color: var(--accent); border-left-color: var(--accent); background: rgba(212,168,67,0.06); }
+  .nav-icon { font-size: 15px; width: 16px; text-align: center; }
+
+  .sidebar-status {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+  }
+  .status-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.06em; margin-bottom: 6px; }
+  .status-badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-family: var(--mono); font-size: 11px;
+  }
+  .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+  .status-dot.running { background: var(--success); box-shadow: 0 0 5px var(--success); }
+  .status-dot.stopped { background: var(--danger); }
+
+  /* main */
+  .main { flex: 1; overflow-y: auto; padding: 28px 32px; }
+
+  .page { display: none; }
+  .page.active { display: block; }
+
+  .page-title {
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    letter-spacing: 0.1em; text-transform: uppercase;
+    margin-bottom: 24px; padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  /* form */
+  .section-label {
+    font-family: var(--mono); font-size: 10px; color: var(--accent-dim);
+    letter-spacing: 0.08em; text-transform: uppercase;
+    margin: 20px 0 12px;
+  }
+  .section-label:first-of-type { margin-top: 0; }
+
+  .field { margin-bottom: 12px; }
+  .field label {
+    display: block; font-size: 11px; color: var(--muted);
+    margin-bottom: 5px; font-family: var(--mono);
+  }
+  .field input {
+    width: 100%; height: 34px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text); font-family: var(--mono); font-size: 12px;
+    padding: 0 12px;
+    outline: none; transition: border-color 0.15s;
+    -webkit-user-select: text; user-select: text;
+  }
+  .field input:focus { border-color: var(--accent-dim); }
+  .field input::placeholder { color: var(--muted); }
+  .field input.auto {
+    border-color: var(--accent-dim);
+    color: var(--accent-dim);
+  }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+  /* buttons */
+  .btn-row { display: flex; gap: 10px; margin-top: 24px; }
+  .btn {
+    height: 36px; padding: 0 20px; border-radius: 4px; border: none;
+    font-family: var(--mono); font-size: 12px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 8px;
+    transition: all 0.15s; letter-spacing: 0.03em;
+  }
+  .btn-primary { background: var(--accent); color: #0b0b0b; font-weight: 500; }
+  .btn-primary:hover { background: #e0b750; }
+  .btn-primary:disabled { background: var(--accent-dim); color: #333; cursor: not-allowed; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--border-hi); color: var(--text); }
+  .btn-danger { background: transparent; color: var(--danger); border: 1px solid #3a1f1f; }
+  .btn-danger:hover { background: #2a1414; }
+  .btn-success { background: transparent; color: var(--success); border: 1px solid #1a3a28; }
+  .btn-success:hover { background: #0f2a1c; }
+
+  /* status page */
+  .status-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 24px; }
+  .stat-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 16px 18px;
+  }
+  .stat-card-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 0.06em; margin-bottom: 8px; }
+  .stat-card-value { font-family: var(--mono); font-size: 16px; color: var(--text); }
+  .stat-card-value.ok { color: var(--success); }
+  .stat-card-value.warn { color: var(--danger); }
+  .stat-card-value.info { color: var(--info); }
+
+  .controls { display: flex; gap: 10px; margin-bottom: 24px; }
+
+  /* logs */
+  .log-box {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 14px;
+    height: 260px; overflow-y: auto;
+    font-family: var(--mono); font-size: 11px; color: var(--muted);
+    line-height: 1.7;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .log-box .log-info  { color: var(--info); }
+  .log-box .log-error { color: var(--danger); }
+  .log-box .log-warn  { color: var(--accent); }
+
+  /* toast */
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 6px; padding: 10px 16px;
+    font-family: var(--mono); font-size: 11px;
+    display: flex; align-items: center; gap: 8px;
+    opacity: 0; transform: translateY(8px);
+    transition: all 0.2s; pointer-events: none; z-index: 999;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok  { border-color: #1a3a28; color: var(--success); }
+  .toast.err { border-color: #3a1f1f; color: var(--danger); }
+
+  /* progress */
+  .progress-wrap { margin: 16px 0; display: none; }
+  .progress-wrap.show { display: block; }
+  .progress-label { font-family: var(--mono); font-size: 11px; color: var(--muted); margin-bottom: 6px; }
+  .progress-bar { height: 2px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .progress-fill {
+    height: 100%; width: 0%; background: var(--accent);
+    border-radius: 2px; transition: width 0.4s ease;
+  }
+  .progress-fill.indeterminate {
+    width: 40%;
+    animation: slide 1.2s ease-in-out infinite;
+  }
+  @keyframes slide {
+    0%   { transform: translateX(-150%); }
+    100% { transform: translateX(350%); }
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<div class="titlebar">
+  <div class="titlebar-brand">
+    <div class="titlebar-dot"></div>
+    <span class="titlebar-name">LAVOZ :: WORKER v1.0</span>
+  </div>
+  <div class="titlebar-controls">
+    <button class="titlebar-btn" onclick="window.lavoz.minimizeApp()" title="Minimizar">─</button>
+    <button class="titlebar-btn close" onclick="window.lavoz.closeApp()" title="Cerrar">✕</button>
+  </div>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <nav class="sidebar-nav">
+      <div class="nav-item active" data-page="install" onclick="navigate('install')">
+        <span class="nav-icon">⚙</span> Instalación
+      </div>
+      <div class="nav-item" data-page="status" onclick="navigate('status')">
+        <span class="nav-icon">◎</span> Estado
+      </div>
+      <div class="nav-item" data-page="logs" onclick="navigate('logs')">
+        <span class="nav-icon">▤</span> Registros
+      </div>
+    </nav>
+    <div class="sidebar-status">
+      <div class="status-label">Servicio</div>
+      <div class="status-badge">
+        <div class="status-dot" id="sidebar-dot"></div>
+        <span id="sidebar-status-text">verificando...</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- INSTALL PAGE -->
+    <div class="page active" id="page-install">
+      <div class="page-title">Configuración e instalación</div>
+
+      <div class="section-label">Servidor central</div>
+      <div class="field">
+        <label>URL WebSocket del servidor</label>
+        <input type="text" id="serverWsUrl" placeholder="wss://lavozverdad.com/workers">
+      </div>
+      <div class="field">
+        <label>Secreto compartido</label>
+        <input type="password" id="workerSecret" placeholder="••••••••••••••••">
+      </div>
+
+      <div class="section-label">Identificación del equipo</div>
+      <div class="field-row">
+        <div class="field">
+          <label>Worker ID (único por PC)</label>
+          <input type="text" id="workerId" placeholder="worker-pc-estudio">
+        </div>
+        <div class="field">
+          <label>Nombre descriptivo</label>
+          <input type="text" id="workerName" placeholder="PC Estudio">
+        </div>
+      </div>
+
+      <div class="progress-wrap" id="install-progress">
+        <div class="progress-label" id="install-progress-label">Instalando...</div>
+        <div class="progress-bar"><div class="progress-fill indeterminate" id="install-bar"></div></div>
+      </div>
+
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-install" onclick="doInstall()">⬇ Instalar servicio</button>
+        <button class="btn btn-danger" id="btn-uninstall" onclick="doUninstall()" style="display:none">✕ Desinstalar</button>
+      </div>
+    </div>
+
+    <!-- STATUS PAGE -->
+    <div class="page" id="page-status">
+      <div class="page-title">Estado del worker</div>
+
+      <div class="status-cards">
+        <div class="stat-card">
+          <div class="stat-card-label">SERVICIO</div>
+          <div class="stat-card-value" id="stat-installed">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">ESTADO</div>
+          <div class="stat-card-value" id="stat-running">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">WORKER ID</div>
+          <div class="stat-card-value info" id="stat-worker-id">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-card-label">SERVIDOR</div>
+          <div class="stat-card-value info" id="stat-server">—</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button class="btn btn-success" onclick="doStart()">▶ Iniciar</button>
+        <button class="btn btn-danger"  onclick="doStop()">■ Detener</button>
+        <button class="btn btn-ghost"   onclick="refreshStatus()">↻ Actualizar</button>
+      </div>
+    </div>
+
+    <!-- LOGS PAGE -->
+    <div class="page" id="page-logs">
+      <div class="page-title">Registros del servicio</div>
+      <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+        <button class="btn btn-ghost" onclick="refreshLogs()">↻ Actualizar</button>
+      </div>
+      <div class="log-box" id="log-content">Cargando registros...</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+let currentPage = 'install';
+let config = {};
+
+async function init() {
+  const defaults = await window.lavoz.loadDefaults();
+  const saved = await window.lavoz.loadConfig() || {};
+
+  // Saved config takes priority; fall back to auto-generated defaults
+  const c = { ...defaults, ...saved };
+  config = c;
+
+  fillForm(c);
+  await refreshStatus();
+  setInterval(refreshStatus, 10000);
+}
+
+function fillForm(c) {
+  setField('serverWsUrl',    c.serverWsUrl);
+  setField('workerSecret',   c.workerSecret);
+  setField('workerId',       c.workerId,    true);
+  setField('workerName',       c.workerName,    true);
+}
+
+function setField(id, value, autoGenerated) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  if (value) {
+    el.value = value;
+    if (autoGenerated) el.classList.add('auto');
+  }
+}
+
+function readForm() {
+  return {
+    serverWsUrl:        document.getElementById('serverWsUrl').value.trim(),
+    workerId:           document.getElementById('workerId').value.trim(),
+    workerName:         document.getElementById('workerName').value.trim(),
+    workerSecret:       document.getElementById('workerSecret').value.trim(),
+  };
+}
+
+function navigate(page) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + page).classList.add('active');
+  document.querySelector(`[data-page="${page}"]`).classList.add('active');
+  currentPage = page;
+  if (page === 'logs') refreshLogs();
+  if (page === 'status') refreshStatus();
+}
+
+async function refreshStatus() {
+  const { installed, running } = await window.lavoz.checkStatus();
+  const dot  = document.getElementById('sidebar-dot');
+  const text = document.getElementById('sidebar-status-text');
+
+  dot.className  = 'status-dot ' + (running ? 'running' : installed ? 'stopped' : '');
+  text.textContent = running ? 'activo' : installed ? 'detenido' : 'no instalado';
+
+  const statInstalled = document.getElementById('stat-installed');
+  const statRunning   = document.getElementById('stat-running');
+  if (statInstalled) {
+    statInstalled.textContent = installed ? 'instalado' : 'no instalado';
+    statInstalled.className   = 'stat-card-value ' + (installed ? 'ok' : 'warn');
+    statRunning.textContent   = running ? 'ejecutando' : 'detenido';
+    statRunning.className     = 'stat-card-value ' + (running ? 'ok' : 'warn');
+  }
+
+  const statWorkerId = document.getElementById('stat-worker-id');
+  const statServer   = document.getElementById('stat-server');
+  if (statWorkerId && config.workerId) {
+    statWorkerId.textContent = config.workerId;
+    statServer.textContent   = (config.serverWsUrl || '').replace('wss://', '').split('/')[0];
+  }
+
+  const btnUninstall = document.getElementById('btn-uninstall');
+  if (btnUninstall) btnUninstall.style.display = installed ? '' : 'none';
+}
+
+async function doInstall() {
+  const form = readForm();
+  if (!form.serverWsUrl || !form.workerId || !form.workerSecret) {
+    toast('Completa los campos obligatorios', 'err'); return;
+  }
+
+  setProgress(true, 'Instalando servicio de Windows...');
+  document.getElementById('btn-install').disabled = true;
+
+  const result = await window.lavoz.install(form);
+  setProgress(false);
+  document.getElementById('btn-install').disabled = false;
+
+  if (result.ok) {
+    config = form;
+    toast('Servicio instalado e iniciado correctamente', 'ok');
+    await refreshStatus();
+  } else {
+    toast('Error: ' + result.error, 'err');
+  }
+}
+
+async function doUninstall() {
+  setProgress(true, 'Desinstalando servicio...');
+  const result = await window.lavoz.uninstall();
+  setProgress(false);
+  if (result.ok) {
+    toast('Servicio desinstalado', 'ok');
+    await refreshStatus();
+  } else {
+    toast('Error: ' + result.error, 'err');
+  }
+}
+
+async function doStart() {
+  const r = await window.lavoz.startService();
+  toast(r.ok ? 'Servicio iniciado' : 'Error: ' + r.error, r.ok ? 'ok' : 'err');
+  setTimeout(refreshStatus, 1500);
+}
+
+async function doStop() {
+  const r = await window.lavoz.stopService();
+  toast(r.ok ? 'Servicio detenido' : 'Error: ' + r.error, r.ok ? 'ok' : 'err');
+  setTimeout(refreshStatus, 1500);
+}
+
+async function refreshLogs() {
+  const box = document.getElementById('log-content');
+  const raw = await window.lavoz.readLogs();
+  if (!raw) { box.textContent = 'Sin registros aún.'; return; }
+
+  box.innerHTML = raw.split('\n').map(line => {
+    let cls = '';
+    try {
+      const obj = JSON.parse(line);
+      if (obj.level === 'error') cls = 'log-error';
+      else if (obj.level === 'warn') cls = 'log-warn';
+      else cls = 'log-info';
+      return `<span class="${cls}">${escHtml(line)}</span>`;
+    } catch {
+      return `<span>${escHtml(line)}</span>`;
+    }
+  }).join('\n');
+
+  box.scrollTop = box.scrollHeight;
+}
+
+function setProgress(show, label) {
+  const wrap = document.getElementById('install-progress');
+  wrap.className = 'progress-wrap' + (show ? ' show' : '');
+  if (label) document.getElementById('install-progress-label').textContent = label;
+}
+
+let toastTimer;
+function toast(msg, type) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show ' + (type || '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.classList.remove('show'); }, 3500);
+}
+
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+init();
+</script>
+</body>
+</html>

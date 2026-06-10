@@ -7,6 +7,10 @@ import { logger } from "../logger";
 
 const execFileAsync = promisify(execFile);
 
+// Uses the portable yt-dlp binary path from config when available,
+// falling back to system PATH for local development.
+const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
+
 export async function downloadAsMp3(videoId: string, url: string): Promise<string> {
   if (!fs.existsSync(config.tempDir)) {
     fs.mkdirSync(config.tempDir, { recursive: true });
@@ -15,10 +19,10 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
   const outputTemplate = path.join(config.tempDir, `${videoId}.%(ext)s`);
   const expectedPath   = path.join(config.tempDir, `${videoId}.mp3`);
 
-  logger.info("Download", "Starting download", { videoId });
+  logger.info("Download", "Starting download", { videoId, bin: YTDLP });
 
   await execFileAsync(
-    "yt-dlp",
+    YTDLP,
     ["-x", "--audio-format", "mp3", "--audio-quality", "0", "--no-playlist", "-o", outputTemplate, url],
     { timeout: 300_000 }
   );

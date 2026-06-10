@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 
 const execFileAsync = promisify(execFile);
+const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
 
 export interface VideoMeta {
   duration: number;
@@ -12,7 +13,7 @@ export interface VideoMeta {
 export async function fetchMetadata(url: string): Promise<VideoMeta> {
   try {
     const { stdout } = await execFileAsync(
-      "yt-dlp",
+      YTDLP,
       ["--dump-json", "--no-playlist", url],
       { timeout: 30_000 }
     );

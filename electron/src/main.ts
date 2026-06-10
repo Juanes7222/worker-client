@@ -3,40 +3,18 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec, ExecOptions } from 'child_process';
 import * as os from 'os';
+import { WorkerConfig, ActionResult, WorkerStatus } from './types';
 
-interface WorkerConfig {
-  serverWsUrl: string;
-  workerId: string;
-  workerName: string;
-  workerSecret: string;
-  azuracastBaseUrl: string;
-  azuracastApiKey: string;
-  azuracastStationId: string;
-  azuracastPlaylistId?: string;
-}
+const LOCAL_APP_DATA  = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
+const CONFIG_PATH     = path.join(os.homedir(), '.lavoz-worker', 'config.json');
+const INSTALL_DIR     = path.join(LOCAL_APP_DATA, 'LaVozWorker');
+const BINS_DIR        = path.join(INSTALL_DIR, 'bins');
 
-interface ActionResult {
-  ok: boolean;
-  error?: string;
-}
-
-interface WorkerStatus {
-  installed: boolean;
-  running: boolean;
-}
-
-const LOCAL_APP_DATA = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
-const CONFIG_PATH = path.join(os.homedir(), '.lavoz-worker', 'config.json');
-const INSTALL_DIR = path.join(LOCAL_APP_DATA, 'LaVozWorker');
-const SERVICE_SCRIPT = path.join(INSTALL_DIR, 'install-service.js');
-const SERVICE_EXECUTABLE = path.join(INSTALL_DIR, 'lavoz-service.exe');
-const SERVICE_CONFIG_XML = path.join(INSTALL_DIR, 'lavoz-service.xml');
+const SERVICE_EXE     = path.join(BINS_DIR, 'WinSW.exe');
+const SERVICE_XML     = path.join(INSTALL_DIR, 'lavoz-service.xml');
 
 let mainWindow: BrowserWindow | null = null;
 
-/**
- * Initializes and displays the main application window.
- */
 function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 720,
@@ -50,87 +28,87 @@ function createWindow(): void {
     },
     backgroundColor: '#0f0f0f',
   });
-
   mainWindow.loadFile(path.join(__dirname, 'ui', 'index.html'));
 }
 
 app.whenReady().then(createWindow);
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
+  if (process.platform !== 'darwin') app.quit();
 });
+
 
 ipcMain.handle('load-config', (): WorkerConfig | null => {
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as WorkerConfig;
     }
-  } catch {
-    // Fails silently to return null on invalid or missing config
-  }
+  } catch {}
   return null;
 });
 
 ipcMain.handle('check-status', (): Promise<WorkerStatus> => {
   return new Promise((resolve) => {
     exec('sc query LaVozWorker', (_, stdout) => {
-      if (!stdout) {
-        resolve({ installed: false, running: false });
-        return;
-      }
-      resolve({
-        installed: true,
-        running: stdout.includes('RUNNING'),
-      });
+      if (!stdout) { resolve({ installed: false, running: false }); return; }
+      resolve({ installed: true, running: stdout.includes('RUNNING') });
     });
   });
 });
 
-ipcMain.handle('install', async (_event: IpcMainInvokeEvent, config: WorkerConfig): Promise<ActionResult> => {
+ipcMain.handle('install', async (
+  _event: IpcMainInvokeEvent,
+  config: WorkerConfig
+): Promise<ActionResult> => {
   try {
     ensureDirectoryExists(INSTALL_DIR);
+    ensureDirectoryExists(BINS_DIR);
     ensureDirectoryExists(path.dirname(CONFIG_PATH));
 
+    // 1. Save config for the UI to reload later
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
 
-    const workerSource = getWorkerSourcePath();
-    copyDirectoryRecursive(workerSource, INSTALL_DIR);
+    // 2. Copy compiled worker (dist/) to install dir
+    copyDirectoryRecursive(getWorkerSourcePath(), INSTALL_DIR);
 
-    // The WinSW executable should be bundled in your extraResources or worker-dist
-    // and copied to INSTALL_DIR during the copyDirectoryRecursive step.
+    // 3. Copy portable binaries: node.exe, yt-dlp.exe, WinSW.exe
+    copyDirectoryRecursive(getBinsSourcePath(), BINS_DIR);
 
-    await executeSystemCommand(`npm install --omit=dev`, { cwd: INSTALL_DIR });
+    // 4. Write .env with all worker variables including absolute binary paths
+    fs.writeFileSync(
+      path.join(INSTALL_DIR, '.env'),
+      buildEnvironmentFileContent(config)
+    );
 
-    fs.writeFileSync(path.join(INSTALL_DIR, '.env'), buildEnvironmentFileContent(config, INSTALL_DIR));
-    fs.writeFileSync(SERVICE_CONFIG_XML, buildServiceConfigurationXml(INSTALL_DIR));
+    // 5. Write WinSW service descriptor XML
+    fs.writeFileSync(SERVICE_XML, buildServiceXml());
 
-    await executeSystemCommand(`"${SERVICE_EXECUTABLE}" install`, { cwd: INSTALL_DIR });
-    await executeSystemCommand(`"${SERVICE_EXECUTABLE}" start`, { cwd: INSTALL_DIR });
+    // 6. Register and start the Windows service via WinSW
+    await executeSystemCommand(`"${SERVICE_EXE}" install "${SERVICE_XML}"`);
+    await executeSystemCommand(`"${SERVICE_EXE}" start`);
 
     return { ok: true };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: errorMessage };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 });
+
 ipcMain.handle('uninstall', async (): Promise<ActionResult> => {
   try {
-    if (fs.existsSync(SERVICE_EXECUTABLE)) {
-      await executeSystemCommand(`"${SERVICE_EXECUTABLE}" stop`, { cwd: INSTALL_DIR });
-      await executeSystemCommand(`"${SERVICE_EXECUTABLE}" uninstall`, { cwd: INSTALL_DIR });
+    if (fs.existsSync(SERVICE_EXE)) {
+      // Stop may fail if already stopped — ignore that error
+      await executeSystemCommand(`"${SERVICE_EXE}" stop`).catch(() => {});
+      await executeSystemCommand(`"${SERVICE_EXE}" uninstall`);
     }
     return { ok: true };
   } catch (err) {
-    const errorMessage = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: errorMessage };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 });
 
 ipcMain.handle('start-service', (): Promise<ActionResult> => {
   return new Promise((resolve) => {
-    exec(`"${SERVICE_EXECUTABLE}" start`, { cwd: INSTALL_DIR }, (err) => {
+    exec(`"${SERVICE_EXE}" start`, (err) => {
       resolve({ ok: !err, error: err?.message });
     });
   });
@@ -138,7 +116,7 @@ ipcMain.handle('start-service', (): Promise<ActionResult> => {
 
 ipcMain.handle('stop-service', (): Promise<ActionResult> => {
   return new Promise((resolve) => {
-    exec(`"${SERVICE_EXECUTABLE}" stop`, { cwd: INSTALL_DIR }, (err) => {
+    exec(`"${SERVICE_EXE}" stop`, (err) => {
       resolve({ ok: !err, error: err?.message });
     });
   });
@@ -147,9 +125,7 @@ ipcMain.handle('stop-service', (): Promise<ActionResult> => {
 ipcMain.handle('read-logs', (): string => {
   const logPath = path.join(INSTALL_DIR, 'logs', 'worker.log');
   try {
-    if (!fs.existsSync(logPath)) {
-      return '';
-    }
+    if (!fs.existsSync(logPath)) return '';
     const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
     return lines.slice(-100).join('\n');
   } catch {
@@ -157,54 +133,44 @@ ipcMain.handle('read-logs', (): string => {
   }
 });
 
-ipcMain.handle('close-app', () => app.quit());
+ipcMain.handle('close-app',    () => app.quit());
 ipcMain.handle('minimize-app', () => mainWindow?.minimize());
 
+// ── Path resolvers ───────────────────────────────────────────────
+
 /**
- * Resolves the path to the compiled worker source depending on the execution environment.
+ * In development: uses worker/dist relative to this file.
+ * In packaged .exe: uses the extraResources bundle.
  */
 function getWorkerSourcePath(): string {
   if (app.isPackaged) {
-    // In packaged .exe, the compiled worker is bundled within extraResources
     return path.join(process.resourcesPath, 'worker-dist');
   }
   return path.join(__dirname, '..', '..', 'worker', 'dist');
 }
 
 /**
- * Creates a directory and its parents if they do not exist.
+ * In development: uses resources/bins relative to the repo root.
+ * In packaged .exe: uses the extraResources bundle.
  */
-function ensureDirectoryExists(directoryPath: string): void {
-  if (!fs.existsSync(directoryPath)) {
-    fs.mkdirSync(directoryPath, { recursive: true });
+function getBinsSourcePath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'bins');
   }
+  return path.join(__dirname, '..', '..', 'resources', 'bins');
 }
 
-/**
- * Recursively copies all contents from a source directory to a destination directory.
- */
-function copyDirectoryRecursive(source: string, destination: string): void {
-  if (!fs.existsSync(source)) {
-    throw new Error(
-      `Worker dist not found at: ${source}\nRun "pnpm build" inside the worker/ folder first.`
-    );
-  }
-  ensureDirectoryExists(destination);
-  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
-    const sourcePath = path.join(source, entry.name);
-    const destinationPath = path.join(destination, entry.name);
-    if (entry.isDirectory()) {
-      copyDirectoryRecursive(sourcePath, destinationPath);
-    } else {
-      fs.copyFileSync(sourcePath, destinationPath);
-    }
-  }
-}
+// ── Builders ────────────────────────────────────────────────────
 
 /**
- * Generates the environment variables string for the worker configuration.
+ * Writes all worker environment variables.
+ * NODE_BIN and YTDLP_BIN point to the portable binaries so the worker
+ * never depends on the system PATH.
  */
-function buildEnvironmentFileContent(config: WorkerConfig, installDirectory: string): string {
+function buildEnvironmentFileContent(config: WorkerConfig): string {
+  const nodeBin  = path.join(BINS_DIR, 'node.exe');
+  const ytDlpBin = path.join(BINS_DIR, 'yt-dlp.exe');
+
   return [
     `SERVER_WS_URL=${config.serverWsUrl}`,
     `WORKER_ID=${config.workerId}`,
@@ -216,63 +182,68 @@ function buildEnvironmentFileContent(config: WorkerConfig, installDirectory: str
     `AZURACAST_STATION_ID=${config.azuracastStationId}`,
     `AZURACAST_PLAYLIST_ID=${config.azuracastPlaylistId ?? ''}`,
     `MAX_VIDEO_DURATION_SECONDS=600`,
-    `TEMP_DOWNLOAD_DIR=${path.join(installDirectory, 'temp')}`,
+    `TEMP_DOWNLOAD_DIR=${path.join(INSTALL_DIR, 'temp')}`,
+    `NODE_BIN=${nodeBin}`,
+    `YTDLP_BIN=${ytDlpBin}`,
   ].join('\n');
 }
 
-function buildServiceConfigurationXml(installDirectory: string): string {
-  const nodeExecutable = process.execPath; 
-  const scriptPath = path.join(installDirectory, 'main.js');
-
-  return `
-<service>
-  <id>LaVozWorker</id>
-  <name>La Voz de la Verdad Worker</name>
-  <description>Audio processing worker for stream automation</description>
-  <executable>${nodeExecutable}</executable>
-  <arguments>"${scriptPath}"</arguments>
-  <log mode="roll"></log>
-  <workingdirectory>${installDirectory}</workingdirectory>
-  <env name="NODE_ENV" value="production"/>
-</service>
-`.trim();
-}
-
 /**
- * Generates the Windows service installation script.
+ * Generates the WinSW XML descriptor that defines the Windows service.
+ * WinSW uses the portable node.exe to run the compiled worker entry point.
+ * See: https://github.com/winsw/winsw
  */
-function buildServiceScriptContent(installDirectory: string): string {
-  const escapedDirectoryPath = installDirectory.replace(/\\/g, '\\\\');
+function buildServiceXml(): string {
+  const nodeBin    = path.join(BINS_DIR, 'node.exe');
+  const scriptPath = path.join(INSTALL_DIR, 'main.js');
+  const logsDir    = path.join(INSTALL_DIR, 'logs');
 
-  return `
-const Service = require('node-windows').Service;
-const path = require('path');
+  ensureDirectoryExists(logsDir);
 
-const svc = new Service({
-  name: 'LaVozWorker',
-  description: 'La Voz de la Verdad - Audio processing worker',
-  script: path.join('${escapedDirectoryPath}', 'main.js'),
-  workingDirectory: '${escapedDirectoryPath}',
-  env: [{ name: 'NODE_ENV', value: 'production' }],
-});
-
-const action = process.argv[2];
-
-if (action === 'install') {
-  svc.on('install', () => { svc.start(); process.exit(0); });
-  svc.on('error', (e) => { console.error(e); process.exit(1); });
-  svc.install();
-} else if (action === 'uninstall') {
-  svc.on('uninstall', () => { process.exit(0); });
-  svc.on('error', (e) => { console.error(e); process.exit(1); });
-  svc.uninstall();
+  return [
+    '<service>',
+    '  <id>LaVozWorker</id>',
+    '  <name>La Voz de la Verdad Worker</name>',
+    '  <description>Audio processing worker for stream automation</description>',
+    `  <executable>${nodeBin}</executable>`,
+    `  <arguments>"${scriptPath}"</arguments>`,
+    `  <workingdirectory>${INSTALL_DIR}</workingdirectory>`,
+    `  <logpath>${logsDir}</logpath>`,
+    '  <log mode="roll-by-size">',
+    '    <sizeThreshold>5120</sizeThreshold>',
+    '    <keepFiles>3</keepFiles>',
+    '  </log>',
+    '  <env name="NODE_ENV" value="production"/>',
+    '  <onfailure action="restart" delay="10 sec"/>',
+    '  <onfailure action="restart" delay="20 sec"/>',
+    '  <onfailure action="none"/>',
+    '</service>',
+  ].join('\n');
 }
-`;
+
+
+function ensureDirectoryExists(directoryPath: string): void {
+  if (!fs.existsSync(directoryPath)) {
+    fs.mkdirSync(directoryPath, { recursive: true });
+  }
 }
 
-/**
- * Wraps child_process.exec in a Promise for async/await usage.
- */
+function copyDirectoryRecursive(source: string, destination: string): void {
+  if (!fs.existsSync(source)) {
+    throw new Error(`Source not found: ${source}`);
+  }
+  ensureDirectoryExists(destination);
+  for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+    const sourcePath      = path.join(source, entry.name);
+    const destinationPath = path.join(destination, entry.name);
+    if (entry.isDirectory()) {
+      copyDirectoryRecursive(sourcePath, destinationPath);
+    } else {
+      fs.copyFileSync(sourcePath, destinationPath);
+    }
+  }
+}
+
 function executeSystemCommand(command: string, options: ExecOptions = {}): Promise<void> {
   return new Promise((resolve, reject) => {
     exec(command, options, (error) => {

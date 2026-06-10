@@ -5,8 +5,11 @@
   "author": "La Voz de la Verdad",
   "main": "src/main.ts",
   "scripts": {
-    "start": "electron .",
-    "build": "electron-builder build --win --x64"
+    "dev": "tsc && electron .",
+    "dev:watch": "tsc --watch & electron .",
+    "build:ts": "tsc",
+    "build": "tsc && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder build --win --x64",
+    "clean:service": "sc stop LaVozWorker & sc delete LaVozWorker & echo done"
   },
   "build": {
     "appId": "com.lavozverdad.worker",
@@ -32,8 +35,20 @@
         "to": "worker-dist"
       },
       {
+        "from": "../worker/node_modules",
+        "to": "worker-dist/node_modules"
+      },
+      {
         "from": "../worker/package.json",
         "to": "worker-dist/package.json"
+      },
+      {
+        "from": "../resources/node/node.exe",
+        "to": "bins/node.exe"
+      },
+      {
+        "from": "../resources/yt-dlp/yt-dlp.exe",
+        "to": "bins/yt-dlp.exe"
       }
     ],
     "win": {
@@ -55,7 +70,9 @@
     "node-windows": "^1.0.0-beta.8"
   },
   "devDependencies": {
+    "@types/node": "^25.9.2",
     "electron": "^42.3.3",
-    "electron-builder": "^24.13.3"
+    "electron-builder": "^24.13.3",
+    "typescript": "^6.0.3"
   }
 }

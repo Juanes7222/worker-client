@@ -47,6 +47,7 @@ export interface JobDoneMessage {
   azuracastFileId: string;
   azuracastPath: string;
   duration: number;
+  ignored?: boolean;
 }
 
 export interface JobErrorMessage {

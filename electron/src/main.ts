@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { exec, ExecOptions } from 'child_process';
 import * as os from 'os';
-import { WorkerConfig, ActionResult, WorkerStatus } from './types';
+import { WorkerConfig, ActionResult, WorkerStatus, InstallDefaults } from './types';
 
 const LOCAL_APP_DATA  = process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local');
 const CONFIG_PATH     = path.join(os.homedir(), '.lavoz-worker', 'config.json');
@@ -37,6 +37,19 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
+
+ipcMain.handle('load-defaults', (): InstallDefaults => {
+  const installDefaults = readInstallDefaults();
+  const hostname = os.hostname();
+  const randomSuffix = Math.random().toString(36).slice(2, 6);
+
+  return {
+    serverWsUrl: installDefaults?.serverWsUrl,
+    workerSecret: installDefaults?.workerSecret,
+    workerId: installDefaults?.workerId ?? `worker-${hostname}-${randomSuffix}`,
+    workerName: installDefaults?.workerName ?? hostname,
+  };
+});
 
 ipcMain.handle('load-config', (): WorkerConfig | null => {
   try {
@@ -144,7 +157,7 @@ ipcMain.handle('minimize-app', () => mainWindow?.minimize());
  */
 function getWorkerSourcePath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'worker-dist');
+    return path.join((process as any).resourcesPath, 'worker-dist');
   }
   return path.join(__dirname, '..', '..', 'worker', 'dist');
 }
@@ -155,9 +168,31 @@ function getWorkerSourcePath(): string {
  */
 function getBinsSourcePath(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'bins');
+    return path.join((process as any).resourcesPath, 'bins');
   }
   return path.join(__dirname, '..', '..', 'resources', 'bins');
+}
+
+/**
+ * Reads an optional install-config.json that can be bundled with the .exe
+ * to pre-fill server URL and secret. This is the easiest way to distribute
+ * the installer to collaborators without asking them to type anything.
+ */
+function readInstallDefaults(): Partial<InstallDefaults> | null {
+  const possiblePaths: string[] = [];
+  if (app.isPackaged) {
+    possiblePaths.push(path.join((process as any).resourcesPath, 'install-config.json'));
+  }
+  possiblePaths.push(path.join(__dirname, '..', '..', 'install-config.json'));
+
+  for (const p of possiblePaths) {
+    try {
+      if (fs.existsSync(p)) {
+        return JSON.parse(fs.readFileSync(p, 'utf8')) as Partial<InstallDefaults>;
+      }
+    } catch {}
+  }
+  return null;
 }
 
 // ── Builders ────────────────────────────────────────────────────
@@ -177,10 +212,6 @@ function buildEnvironmentFileContent(config: WorkerConfig): string {
     `WORKER_NAME=${config.workerName}`,
     `WORKER_SECRET=${config.workerSecret}`,
     `WORKER_MAX_CONCURRENT_JOBS=1`,
-    `AZURACAST_BASE_URL=${config.azuracastBaseUrl}`,
-    `AZURACAST_API_KEY=${config.azuracastApiKey}`,
-    `AZURACAST_STATION_ID=${config.azuracastStationId}`,
-    `AZURACAST_PLAYLIST_ID=${config.azuracastPlaylistId ?? ''}`,
     `MAX_VIDEO_DURATION_SECONDS=600`,
     `TEMP_DOWNLOAD_DIR=${path.join(INSTALL_DIR, 'temp')}`,
     `NODE_BIN=${nodeBin}`,

@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Instalador del worker de La Voz de la Verdad",
   "author": "La Voz de la Verdad",
-  "main": "src/main.ts",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "tsc && electron .",
     "dev:watch": "tsc --watch & electron .",
@@ -24,7 +24,7 @@
         "from": ".",
         "to": ".",
         "filter": [
-          "src/**/*",
+          "dist-electron/**/*",
           "package.json"
         ]
       }
@@ -43,12 +43,16 @@
         "to": "worker-dist/package.json"
       },
       {
-        "from": "../resources/node/node.exe",
+        "from": "../resources/bins/node.exe",
         "to": "bins/node.exe"
       },
       {
-        "from": "../resources/yt-dlp/yt-dlp.exe",
+        "from": "../resources/bins/yt-dlp.exe",
         "to": "bins/yt-dlp.exe"
+      },
+      {
+        "from": "../resources/bins/WinSW.exe",
+        "to": "bins/WinSW.exe"
       }
     ],
     "win": {
@@ -66,13 +70,11 @@
       "shortcutName": "La Voz Worker"
     }
   },
-  "dependencies": {
-    "node-windows": "^1.0.0-beta.8"
-  },
   "devDependencies": {
-    "@types/node": "^25.9.2",
+    "@types/node": "^22.19.20",
+    "cross-env": "^7.0.3",
     "electron": "^42.3.3",
     "electron-builder": "^24.13.3",
-    "typescript": "^6.0.3"
+    "typescript": "^5.7.2"
   }
 }

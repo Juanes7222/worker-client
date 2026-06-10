@@ -1,0 +1,4 @@
+{
+  "serverWsUrl": "wss://lavozverdad.com/workers",
+  "workerSecret": "cambia_esto_por_un_secreto_largo"
+}

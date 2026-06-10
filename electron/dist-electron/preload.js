@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 const electron_1 = require("electron");
 const lavozApi = {
+    loadDefaults: () => electron_1.ipcRenderer.invoke('load-defaults'),
     loadConfig: () => electron_1.ipcRenderer.invoke('load-config'),
     checkStatus: () => electron_1.ipcRenderer.invoke('check-status'),
     install: (config) => electron_1.ipcRenderer.invoke('install', config),

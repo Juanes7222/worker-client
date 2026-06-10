@@ -65,6 +65,17 @@ electron_1.app.on('window-all-closed', () => {
     if (process.platform !== 'darwin')
         electron_1.app.quit();
 });
+electron_1.ipcMain.handle('load-defaults', () => {
+    const installDefaults = readInstallDefaults();
+    const hostname = os.hostname();
+    const randomSuffix = Math.random().toString(36).slice(2, 6);
+    return {
+        serverWsUrl: installDefaults?.serverWsUrl,
+        workerSecret: installDefaults?.workerSecret,
+        workerId: installDefaults?.workerId ?? `worker-${hostname}-${randomSuffix}`,
+        workerName: installDefaults?.workerName ?? hostname,
+    };
+});
 electron_1.ipcMain.handle('load-config', () => {
     try {
         if (fs.existsSync(CONFIG_PATH)) {
@@ -171,6 +182,27 @@ function getBinsSourcePath() {
     }
     return path.join(__dirname, '..', '..', 'resources', 'bins');
 }
+/**
+ * Reads an optional install-config.json that can be bundled with the .exe
+ * to pre-fill server URL and secret. This is the easiest way to distribute
+ * the installer to collaborators without asking them to type anything.
+ */
+function readInstallDefaults() {
+    const possiblePaths = [];
+    if (electron_1.app.isPackaged) {
+        possiblePaths.push(path.join(process.resourcesPath, 'install-config.json'));
+    }
+    possiblePaths.push(path.join(__dirname, '..', '..', 'install-config.json'));
+    for (const p of possiblePaths) {
+        try {
+            if (fs.existsSync(p)) {
+                return JSON.parse(fs.readFileSync(p, 'utf8'));
+            }
+        }
+        catch { }
+    }
+    return null;
+}
 // ── Builders ────────────────────────────────────────────────────
 /**
  * Writes all worker environment variables.
@@ -186,10 +218,6 @@ function buildEnvironmentFileContent(config) {
         `WORKER_NAME=${config.workerName}`,
         `WORKER_SECRET=${config.workerSecret}`,
         `WORKER_MAX_CONCURRENT_JOBS=1`,
-        `AZURACAST_BASE_URL=${config.azuracastBaseUrl}`,
-        `AZURACAST_API_KEY=${config.azuracastApiKey}`,
-        `AZURACAST_STATION_ID=${config.azuracastStationId}`,
-        `AZURACAST_PLAYLIST_ID=${config.azuracastPlaylistId ?? ''}`,
         `MAX_VIDEO_DURATION_SECONDS=600`,
         `TEMP_DOWNLOAD_DIR=${path.join(INSTALL_DIR, 'temp')}`,
         `NODE_BIN=${nodeBin}`,

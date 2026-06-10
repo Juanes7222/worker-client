@@ -19,7 +19,7 @@ export async function fetchMetadata(url: string): Promise<VideoMeta> {
     );
     const data = JSON.parse(stdout);
     return { duration: data.duration ?? 0, title: data.title ?? "", available: true };
-  } catch {
-    return { duration: 0, title: "", available: false };
+  } catch (err) {
+    throw new Error(`Metadata fetch failed: ${String(err)}`);
   }
 }

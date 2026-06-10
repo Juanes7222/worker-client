@@ -3,10 +3,13 @@ export interface WorkerConfig {
   workerId: string;
   workerName: string;
   workerSecret: string;
-  azuracastBaseUrl: string;
-  azuracastApiKey: string;
-  azuracastStationId: string;
-  azuracastPlaylistId?: string;
+}
+
+export interface InstallDefaults {
+  serverWsUrl?: string;
+  workerSecret?: string;
+  workerId: string;
+  workerName: string;
 }
 
 export interface ActionResult {

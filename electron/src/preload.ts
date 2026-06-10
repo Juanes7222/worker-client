@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import { WorkerConfig, ActionResult, WorkerStatus } from './types';
+import { WorkerConfig, ActionResult, WorkerStatus, InstallDefaults } from './types';
 
 export interface LaVozApi {
+  loadDefaults: () => Promise<InstallDefaults>;
   loadConfig:   () => Promise<WorkerConfig | null>;
   checkStatus:  () => Promise<WorkerStatus>;
   install:      (config: WorkerConfig) => Promise<ActionResult>;
@@ -14,6 +15,7 @@ export interface LaVozApi {
 }
 
 const lavozApi: LaVozApi = {
+  loadDefaults: () => ipcRenderer.invoke('load-defaults'),
   loadConfig:   () => ipcRenderer.invoke('load-config'),
   checkStatus:  () => ipcRenderer.invoke('check-status'),
   install:      (config) => ipcRenderer.invoke('install', config),

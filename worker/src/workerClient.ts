@@ -1,59 +1,109 @@
 import WebSocket from "ws";
 import { config } from "./config";
+import { logger } from "./logger";
 import { fetchMetadata } from "./processor/metadata";
 import { downloadAsMp3, deleteFile } from "./processor/download";
 import { uploadToAzuracast } from "./processor/upload";
 import { AssignJobMessage, WorkerMessage } from "./types/protocol.types";
 
-type StatusReporter = (jobId: string, status: string) => void;
-
 let socket: WebSocket;
 let reconnectDelay = 3000;
+let heartbeatTimer: NodeJS.Timeout | null = null;
+let activeJobs = 0;
 
 export function startWorkerClient(): void {
   connect();
 }
 
 function connect(): void {
-  console.log(`[Worker] Connecting to ${config.serverWsUrl}`);
+  logger.info("WorkerClient", "Connecting", { url: config.serverWsUrl });
   socket = new WebSocket(config.serverWsUrl);
 
   socket.on("open", () => {
     reconnectDelay = 3000;
-    console.log("[Worker] Connected");
-    send({ type: "register", workerId: config.workerId, secret: config.workerSecret, name: config.workerName, maxConcurrentJobs: config.maxConcurrentJobs });
+    logger.info("WorkerClient", "Connected");
+    send({
+      type: "register",
+      workerId: config.workerId,
+      secret: config.workerSecret,
+      name: config.workerName,
+      maxConcurrentJobs: config.maxConcurrentJobs,
+    });
     startHeartbeat();
   });
 
-  socket.on("message", async (raw) => {
-    const message = JSON.parse(raw.toString());
-    if (message.type === "assign_job") {
-      await handleJob(message as AssignJobMessage);
+  socket.on("message", (raw) => {
+    let message: Record<string, unknown>;
+    try {
+      message = JSON.parse(raw.toString()) as Record<string, unknown>;
+    } catch {
+      logger.warn("WorkerClient", "Invalid JSON from server");
+      return;
+    }
+
+    const type = message.type as string;
+    switch (type) {
+      case "acknowledge":
+        logger.info("WorkerClient", "Registration acknowledged by server");
+        break;
+      case "ping":
+        send({ type: "pong", workerId: config.workerId });
+        break;
+      case "assign_job":
+        if (activeJobs >= config.maxConcurrentJobs) {
+          logger.warn("WorkerClient", "Received assign_job but already at max concurrency", {
+            activeJobs,
+            maxConcurrentJobs: config.maxConcurrentJobs,
+          });
+          return;
+        }
+        void handleJob(message as unknown as AssignJobMessage);
+        break;
+      default:
+        logger.warn("WorkerClient", "Unknown message type from server", { type });
     }
   });
 
   socket.on("close", () => {
-    console.warn(`[Worker] Disconnected. Reconnecting in ${reconnectDelay}ms`);
+    logger.warn("WorkerClient", "Disconnected", { reconnectDelay });
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
   });
 
   socket.on("error", (err) => {
-    console.error("[Worker] Socket error:", err.message);
+    logger.error("WorkerClient", "Socket error", { error: err.message });
   });
 }
 
 function startHeartbeat(): void {
-  setInterval(() => {
+  if (heartbeatTimer) {
+    clearInterval(heartbeatTimer);
+  }
+  heartbeatTimer = setInterval(() => {
     if (socket.readyState === WebSocket.OPEN) {
-      send({ type: "heartbeat", workerId: config.workerId, status: "idle" });
+      const status = activeJobs > 0 ? "busy" : "idle";
+      const heartbeatMsg: WorkerMessage = {
+        type: "heartbeat",
+        workerId: config.workerId,
+        status,
+        ...(activeJobs > 0 ? {} : {}), // currentJobId is optional; we omit it when idle
+      };
+      send(heartbeatMsg);
     }
   }, 20_000);
 }
 
 function send(message: WorkerMessage): void {
   if (socket.readyState === WebSocket.OPEN) {
-    socket.send(JSON.stringify(message));
+    try {
+      socket.send(JSON.stringify(message));
+    } catch (err) {
+      logger.error("WorkerClient", "Failed to send message", { error: String(err) });
+    }
   }
 }
 
@@ -62,7 +112,10 @@ function reportStatus(jobId: string, status: string): void {
 }
 
 async function handleJob(job: AssignJobMessage): Promise<void> {
-  const { jobId, videoId, url, title, azuracast } = job;
+  const { jobId, videoId, url, azuracast } = job;
+
+  activeJobs++;
+  logger.info("WorkerClient", "Job started", { jobId, videoId, activeJobs });
 
   send({ type: "job_ack", workerId: config.workerId, jobId });
 
@@ -72,13 +125,22 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     reportStatus(jobId, "CHECKING_METADATA");
     const meta = await fetchMetadata(url);
 
-    if (!meta.available) {
-      send({ type: "job_error", workerId: config.workerId, jobId, error: "Video not available", retryable: false });
-      return;
-    }
-
     if (meta.duration > job.maxDurationSeconds) {
+      logger.info("WorkerClient", "Video ignored: exceeds max duration", {
+        videoId,
+        duration: meta.duration,
+        max: job.maxDurationSeconds,
+      });
       reportStatus(jobId, "IGNORED");
+      send({
+        type: "job_done",
+        workerId: config.workerId,
+        jobId,
+        azuracastFileId: "",
+        azuracastPath: "",
+        duration: meta.duration,
+        ignored: true,
+      });
       return;
     }
 
@@ -89,6 +151,7 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     const { fileId, azuraPath } = await uploadToAzuracast(localPath, azuracast);
 
     deleteFile(localPath);
+    localPath = null;
 
     send({
       type: "job_done",
@@ -99,14 +162,25 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
       duration: meta.duration,
     });
 
+    logger.info("WorkerClient", "Job completed", { jobId, videoId, azuraPath });
   } catch (err) {
-    if (localPath) deleteFile(localPath);
+    if (localPath) {
+      deleteFile(localPath);
+      localPath = null;
+    }
+
+    const errorMessage = String(err);
+    logger.error("WorkerClient", "Job failed", { jobId, videoId, error: errorMessage });
+
     send({
       type: "job_error",
       workerId: config.workerId,
       jobId,
-      error: String(err),
+      error: errorMessage,
       retryable: true,
     });
+  } finally {
+    activeJobs--;
+    logger.info("WorkerClient", "Job finished", { jobId, activeJobs });
   }
 }

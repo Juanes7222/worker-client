@@ -1,7 +1,16 @@
 import dotenv from "dotenv";
 import path from "path";
+import fs from "fs";
 
-dotenv.config({ path: path.resolve(__dirname, "..", ".env") });
+// When running as a packaged service, main.js is directly in INSTALL_DIR.
+// When running with tsx during development, main.ts is inside src/.
+// Try both paths so the worker works in both environments.
+const envPathProduction = path.resolve(__dirname, ".env");
+const envPathDevelopment = path.resolve(__dirname, "..", ".env");
+
+const envPath = fs.existsSync(envPathProduction) ? envPathProduction : envPathDevelopment;
+
+dotenv.config({ path: envPath });
 
 function requireEnv(key: string): string {
   const value = process.env[key];

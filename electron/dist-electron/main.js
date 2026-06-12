@@ -118,6 +118,13 @@ electron_1.ipcMain.handle('install', async (_event, config) => {
         copyDirectoryRecursive(getBinsSourcePath(), BINS_DIR);
         // 4. Write .env with all worker variables including absolute binary paths
         fs.writeFileSync(path.join(INSTALL_DIR, '.env'), buildEnvironmentFileContent(config));
+        const scriptPath = path.join(INSTALL_DIR, 'main.js');
+        if (!fs.existsSync(scriptPath)) {
+            return {
+                ok: false,
+                error: `Compiled worker not found: ${scriptPath}. Please run "pnpm run build" in the worker directory before installing.`,
+            };
+        }
         // 5. Write WinSW service descriptor XML
         fs.writeFileSync(SERVICE_XML, buildServiceXml());
         // 6. Register and start the Windows service via WinSW

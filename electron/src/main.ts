@@ -104,6 +104,14 @@ ipcMain.handle('install', async (
       buildEnvironmentFileContent(config)
     );
 
+    const scriptPath = path.join(INSTALL_DIR, 'main.js');
+    if (!fs.existsSync(scriptPath)) {
+      return {
+        ok: false,
+        error: `Compiled worker not found: ${scriptPath}. Please run "pnpm run build" in the worker directory before installing.`,
+      };
+    }
+
     // 5. Write WinSW service descriptor XML
     fs.writeFileSync(SERVICE_XML, buildServiceXml());
 

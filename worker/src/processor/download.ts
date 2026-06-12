@@ -40,7 +40,12 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     throw new Error(`MP3 not found after download: ${expectedPath}`);
   }
 
-  logger.info("Download", "Download complete", { videoId, path: expectedPath });
+  const stats = fs.statSync(expectedPath);
+  if (stats.size < 1024) {
+    throw new Error(`Downloaded MP3 is too small (${stats.size} bytes), likely corrupt: ${expectedPath}`);
+  }
+
+  logger.info("Download", "Download complete", { videoId, path: expectedPath, size: stats.size });
   return expectedPath;
 }
 

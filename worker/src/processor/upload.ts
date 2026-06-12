@@ -1,5 +1,7 @@
 import fs from "fs";
 import path from "path";
+import FormData from "form-data";
+import fetch from "node-fetch";
 import { logger } from "../logger";
 
 export interface AzuracastConfig {
@@ -24,11 +26,16 @@ export async function uploadToAzuracast(
   logger.info("Upload", "Uploading to AzuraCast", { filename });
 
   const form = new FormData();
-  form.append("file", new Blob([fs.readFileSync(localPath)]), filename);
+  form.append("file", fs.createReadStream(localPath), { filename });
 
-  const response = await fetch(`${baseUrl}/api/station/${stationId}/files`, {
+  const uploadUrl = `${baseUrl}/api/station/${stationId}/files`;
+
+  const response = await fetch(uploadUrl, {
     method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}` },
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      ...form.getHeaders(),
+    },
     body: form,
     signal: AbortSignal.timeout(120_000),
   });
@@ -43,7 +50,10 @@ export async function uploadToAzuracast(
   if (playlistId) {
     await fetch(`${baseUrl}/api/station/${stationId}/file/${data.id}`, {
       method: "PUT",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
       body: JSON.stringify({ playlists: [{ id: playlistId }] }),
       signal: AbortSignal.timeout(30_000),
     }).catch(() => {

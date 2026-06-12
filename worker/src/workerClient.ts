@@ -17,7 +17,11 @@ export function startWorkerClient(): void {
 
 function connect(): void {
   logger.info("WorkerClient", "Connecting", { url: config.serverWsUrl });
-  socket = new WebSocket(config.serverWsUrl);
+  socket = new WebSocket(config.serverWsUrl, {
+    headers: {
+      "User-Agent": "LaVozWorker/1.0",
+    },
+  });
 
   socket.on("open", () => {
     reconnectDelay = 3000;
@@ -75,7 +79,12 @@ function connect(): void {
   });
 
   socket.on("error", (err) => {
-    logger.error("WorkerClient", "Socket error", { error: err.message });
+    logger.error("WorkerClient", "Socket error", {
+      error: err.message,
+      code: (err as any).code,
+      errno: (err as any).errno,
+      syscall: (err as any).syscall,
+    });
   });
 }
 

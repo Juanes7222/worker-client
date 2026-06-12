@@ -10,6 +10,8 @@ const execFileAsync = promisify(execFile);
 // Uses the portable yt-dlp binary path from config when available,
 // falling back to system PATH for local development.
 const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
+const FFMPEG = process.env.FFMPEG_BIN ?? "ffmpeg";
+const DENO = process.env.DENO_BIN ?? "deno";
 
 export async function downloadAsMp3(videoId: string, url: string): Promise<string> {
   if (!fs.existsSync(config.tempDir)) {
@@ -21,11 +23,18 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
 
   logger.info("Download", "Starting download", { videoId, bin: YTDLP });
 
-  await execFileAsync(
-    YTDLP,
-    ["-x", "--audio-format", "mp3", "--audio-quality", "0", "--no-playlist", "-o", outputTemplate, url],
-    { timeout: 300_000 }
-  );
+  const args = [
+    "-x",
+    "--audio-format", "mp3",
+    "--audio-quality", "0",
+    "--no-playlist",
+    "--ffmpeg-location", FFMPEG,
+    "--js-runtimes", `deno:${DENO}`,
+    "-o", outputTemplate,
+    url,
+  ];
+
+  await execFileAsync(YTDLP, args, { timeout: 300_000 });
 
   if (!fs.existsSync(expectedPath)) {
     throw new Error(`MP3 not found after download: ${expectedPath}`);

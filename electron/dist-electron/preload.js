@@ -10,6 +10,7 @@ const lavozApi = {
     startService: () => electron_1.ipcRenderer.invoke('start-service'),
     stopService: () => electron_1.ipcRenderer.invoke('stop-service'),
     readLogs: () => electron_1.ipcRenderer.invoke('read-logs'),
+    copyLogs: () => electron_1.ipcRenderer.invoke('copy-logs'),
     closeApp: () => electron_1.ipcRenderer.invoke('close-app'),
     minimizeApp: () => electron_1.ipcRenderer.invoke('minimize-app'),
 };

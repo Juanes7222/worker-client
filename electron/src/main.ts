@@ -1,7 +1,7 @@
-import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent } from 'electron';
+import { app, BrowserWindow, ipcMain, IpcMainInvokeEvent, clipboard } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
-import { exec, ExecOptions } from 'child_process';
+import { exec, execSync, ExecOptions } from 'child_process';
 import * as os from 'os';
 import { WorkerConfig, ActionResult, WorkerStatus, InstallDefaults } from './types';
 
@@ -11,7 +11,7 @@ const INSTALL_DIR     = path.join(LOCAL_APP_DATA, 'LaVozWorker');
 const BINS_DIR        = path.join(INSTALL_DIR, 'bins');
 
 const SERVICE_EXE     = path.join(BINS_DIR, 'WinSW.exe');
-const SERVICE_XML     = path.join(INSTALL_DIR, 'lavoz-service.xml');
+const SERVICE_XML     = path.join(BINS_DIR, 'WinSW.xml');
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -74,6 +74,17 @@ ipcMain.handle('install', async (
   config: WorkerConfig
 ): Promise<ActionResult> => {
   try {
+    const isAdmin = await checkIsAdmin();
+    if (!isAdmin) {
+      return {
+        ok: false,
+        error: 'Se requieren privilegios de administrador para instalar el servicio. Cierra la aplicacion, haz clic derecho en el acceso directo y selecciona "Ejecutar como administrador".',
+      };
+    }
+
+    // 0. Stop and remove any existing service or process before overwriting files
+    await stopAndRemoveService();
+
     ensureDirectoryExists(INSTALL_DIR);
     ensureDirectoryExists(BINS_DIR);
     ensureDirectoryExists(path.dirname(CONFIG_PATH));
@@ -97,7 +108,7 @@ ipcMain.handle('install', async (
     fs.writeFileSync(SERVICE_XML, buildServiceXml());
 
     // 6. Register and start the Windows service via WinSW
-    await executeSystemCommand(`"${SERVICE_EXE}" install "${SERVICE_XML}"`);
+    await executeSystemCommand(`"${SERVICE_EXE}" install`);
     await executeSystemCommand(`"${SERVICE_EXE}" start`);
 
     return { ok: true };
@@ -108,11 +119,7 @@ ipcMain.handle('install', async (
 
 ipcMain.handle('uninstall', async (): Promise<ActionResult> => {
   try {
-    if (fs.existsSync(SERVICE_EXE)) {
-      // Stop may fail if already stopped — ignore that error
-      await executeSystemCommand(`"${SERVICE_EXE}" stop`).catch(() => {});
-      await executeSystemCommand(`"${SERVICE_EXE}" uninstall`);
-    }
+    await stopAndRemoveService();
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
@@ -121,16 +128,16 @@ ipcMain.handle('uninstall', async (): Promise<ActionResult> => {
 
 ipcMain.handle('start-service', (): Promise<ActionResult> => {
   return new Promise((resolve) => {
-    exec(`"${SERVICE_EXE}" start`, (err) => {
-      resolve({ ok: !err, error: err?.message });
+    exec(`"${SERVICE_EXE}" start`, (err, _stdout, stderr) => {
+      resolve({ ok: !err, error: err ? `${err.message}\n${stderr}`.trim() : undefined });
     });
   });
 });
 
 ipcMain.handle('stop-service', (): Promise<ActionResult> => {
   return new Promise((resolve) => {
-    exec(`"${SERVICE_EXE}" stop`, (err) => {
-      resolve({ ok: !err, error: err?.message });
+    exec(`"${SERVICE_EXE}" stop`, (err, _stdout, stderr) => {
+      resolve({ ok: !err, error: err ? `${err.message}\n${stderr}`.trim() : undefined });
     });
   });
 });
@@ -141,6 +148,19 @@ ipcMain.handle('read-logs', (): string => {
     if (!fs.existsSync(logPath)) return '';
     const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
     return lines.slice(-100).join('\n');
+  } catch {
+    return '';
+  }
+});
+
+ipcMain.handle('copy-logs', (): string => {
+  const logPath = path.join(INSTALL_DIR, 'logs', 'worker.log');
+  try {
+    if (!fs.existsSync(logPath)) return '';
+    const lines = fs.readFileSync(logPath, 'utf8').split('\n').filter(Boolean);
+    const lastLines = lines.slice(-100).join('\n');
+    clipboard.writeText(lastLines);
+    return lastLines;
   } catch {
     return '';
   }
@@ -205,6 +225,8 @@ function readInstallDefaults(): Partial<InstallDefaults> | null {
 function buildEnvironmentFileContent(config: WorkerConfig): string {
   const nodeBin  = path.join(BINS_DIR, 'node.exe');
   const ytDlpBin = path.join(BINS_DIR, 'yt-dlp.exe');
+  const ffmpegBin = path.join(BINS_DIR, 'ffmpeg.exe');
+  const denoBin = path.join(BINS_DIR, 'deno.exe');
 
   return [
     `SERVER_WS_URL=${config.serverWsUrl}`,
@@ -216,6 +238,8 @@ function buildEnvironmentFileContent(config: WorkerConfig): string {
     `TEMP_DOWNLOAD_DIR=${path.join(INSTALL_DIR, 'temp')}`,
     `NODE_BIN=${nodeBin}`,
     `YTDLP_BIN=${ytDlpBin}`,
+    `FFMPEG_BIN=${ffmpegBin}`,
+    `DENO_BIN=${denoBin}`,
   ].join('\n');
 }
 
@@ -264,6 +288,28 @@ function copyDirectoryRecursive(source: string, destination: string): void {
     throw new Error(`Source not found: ${source}`);
   }
   ensureDirectoryExists(destination);
+
+  if (process.platform === 'win32') {
+    // robocopy handles long paths (>260 chars) and pnpm symlinks correctly
+    try {
+      execSync(
+      `robocopy "${source}" "${destination}" /E /R:3 /W:2 /NP /NFL /NDL`,
+      {
+        stdio: 'ignore',
+        timeout: 300_000
+      }
+    );
+    } catch (err: any) {
+      // robocopy exit codes 0-7 indicate success (0=nothing copied, 1=fine, etc.)
+      if (err.status == null || err.status >= 8) {
+        const msg = err.stderr?.toString() || err.message;
+        throw new Error(`robocopy failed: ${msg}`);
+      }
+    }
+    return;
+  }
+
+  // Fallback for non-Windows platforms
   for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
     const sourcePath      = path.join(source, entry.name);
     const destinationPath = path.join(destination, entry.name);
@@ -275,10 +321,47 @@ function copyDirectoryRecursive(source: string, destination: string): void {
   }
 }
 
+function checkIsAdmin(): Promise<boolean> {
+  return new Promise((resolve) => {
+    exec('net session', (error) => {
+      resolve(!error);
+    });
+  });
+}
+
+/**
+ * Stops the service via WinSW, then falls back to sc.exe and finally kills
+ * any lingering WinSW.exe / node.exe processes so the installer can overwrite
+ * files and re-register the service cleanly.
+ */
+async function stopAndRemoveService(): Promise<void> {
+  const commands = [
+    `"${SERVICE_EXE}" stop`,
+    `"${SERVICE_EXE}" uninstall`,
+    'sc stop LaVozWorker',
+    'sc delete LaVozWorker',
+    'taskkill /F /IM WinSW.exe',
+    'taskkill /F /IM node.exe',
+  ];
+
+  for (const cmd of commands) {
+    try {
+      await new Promise<void>((resolve) => {
+        exec(cmd, () => resolve());
+      });
+    } catch {
+      // ignore — we just want to keep trying every method
+    }
+  }
+}
+
 function executeSystemCommand(command: string, options: ExecOptions = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    exec(command, options, (error) => {
+    exec(command, options, (error, stdout, stderr) => {
       if (error) {
+        const outText = stdout instanceof Buffer ? stdout.toString() : String(stdout);
+        const errText = stderr instanceof Buffer ? stderr.toString() : String(stderr);
+        error.message = `Command failed: ${command}\nstdout: ${outText.trim()}\nstderr: ${errText.trim()}`;
         reject(error);
       } else {
         resolve();

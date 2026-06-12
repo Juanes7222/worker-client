@@ -1,4 +1,3 @@
-import "dotenv/config";
 import { logger } from "./logger";
 import { startWorkerClient } from "./workerClient";
 

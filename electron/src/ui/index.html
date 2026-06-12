@@ -321,7 +321,8 @@
     <!-- LOGS PAGE -->
     <div class="page" id="page-logs">
       <div class="page-title">Registros del servicio</div>
-      <div style="display:flex; justify-content:flex-end; margin-bottom:10px;">
+      <div style="display:flex; justify-content:flex-end; margin-bottom:10px; gap:8px;">
+        <button class="btn btn-ghost" onclick="copyLogs()">⎘ Copiar</button>
         <button class="btn btn-ghost" onclick="refreshLogs()">↻ Actualizar</button>
       </div>
       <div class="log-box" id="log-content">Cargando registros...</div>
@@ -477,6 +478,15 @@ async function refreshLogs() {
   }).join('\n');
 
   box.scrollTop = box.scrollHeight;
+}
+
+async function copyLogs() {
+  const raw = await window.lavoz.copyLogs();
+  if (raw) {
+    toast('Logs copiados al portapapeles', 'ok');
+  } else {
+    toast('No hay logs para copiar', 'err');
+  }
 }
 
 function setProgress(show, label) {

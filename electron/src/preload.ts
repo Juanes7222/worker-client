@@ -10,6 +10,7 @@ export interface LaVozApi {
   startService: () => Promise<ActionResult>;
   stopService:  () => Promise<ActionResult>;
   readLogs:     () => Promise<string>;
+  copyLogs:     () => Promise<string>;
   closeApp:     () => Promise<void>;
   minimizeApp:  () => Promise<void>;
 }
@@ -23,6 +24,7 @@ const lavozApi: LaVozApi = {
   startService: () => ipcRenderer.invoke('start-service'),
   stopService:  () => ipcRenderer.invoke('stop-service'),
   readLogs:     () => ipcRenderer.invoke('read-logs'),
+  copyLogs:     () => ipcRenderer.invoke('copy-logs'),
   closeApp:     () => ipcRenderer.invoke('close-app'),
   minimizeApp:  () => ipcRenderer.invoke('minimize-app'),
 };

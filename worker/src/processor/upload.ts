@@ -9,10 +9,22 @@ export interface UploadResult {
   azuraPath: string;
 }
 
+export class UploadError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+    public readonly retryable: boolean
+  ) {
+    super(message);
+    this.name = "UploadError";
+  }
+}
+
 export async function uploadToAzuracast(
   localPath: string,
   uploadProxyUrl: string,
-  title: string
+  title: string,
+  workerSecret: string
 ): Promise<UploadResult> {
   const filename = path.basename(localPath);
 
@@ -22,15 +34,29 @@ export async function uploadToAzuracast(
   form.append("file", fs.createReadStream(localPath), { filename });
   form.append("title", title);
 
-  const response = await fetch(uploadProxyUrl, {
-    method: "POST",
-    body: form,
-    signal: AbortSignal.timeout(120_000),
-  });
+  let response: Awaited<ReturnType<typeof fetch>>;
+
+  try {
+    response = await fetch(uploadProxyUrl, {
+      method: "POST",
+      headers: {
+        "X-Worker-Secret": workerSecret,
+      },
+      body: form,
+      signal: AbortSignal.timeout(300_000),
+    });
+  } catch (err) {
+    const msg = String(err);
+    logger.error("Upload", "Network error during proxy upload", { error: msg });
+    throw new UploadError(`Network error: ${msg}`, 0, true);
+  }
 
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(`Proxy upload failed [${response.status}]: ${body}`);
+    const msg = `Proxy upload failed [${response.status}]: ${body}`;
+    logger.error("Upload", msg, { status: response.status });
+    const isRetryable = response.status >= 500 || response.status === 408 || response.status === 429;
+    throw new UploadError(msg, response.status, isRetryable);
   }
 
   const data = (await response.json()) as { fileId: string; azuraPath: string };

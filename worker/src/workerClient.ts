@@ -3,7 +3,7 @@ import { config } from "./config";
 import { logger } from "./logger";
 import { fetchMetadata } from "./processor/metadata";
 import { downloadAsMp3, deleteFile } from "./processor/download";
-import { uploadToAzuracast } from "./processor/upload";
+import { uploadToAzuracast, UploadError } from "./processor/upload";
 import { AssignJobMessage, WorkerMessage } from "./types/protocol.types";
 
 let socket: WebSocket;
@@ -157,7 +157,7 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     localPath = await downloadAsMp3(videoId, url);
 
     reportStatus(jobId, "UPLOADING");
-    const { fileId, azuraPath } = await uploadToAzuracast(localPath, job.uploadProxyUrl, job.title);
+    const { fileId, azuraPath } = await uploadToAzuracast(localPath, job.uploadProxyUrl, job.title, config.workerSecret);
 
     deleteFile(localPath);
     localPath = null;
@@ -179,14 +179,15 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     }
 
     const errorMessage = String(err);
-    logger.error("WorkerClient", "Job failed", { jobId, videoId, error: errorMessage });
+    const isRetryable = err instanceof UploadError ? err.retryable : true;
+    logger.error("WorkerClient", "Job failed", { jobId, videoId, error: errorMessage, retryable: isRetryable });
 
     send({
       type: "job_error",
       workerId: config.workerId,
       jobId,
       error: errorMessage,
-      retryable: true,
+      retryable: isRetryable,
     });
   } finally {
     activeJobs--;

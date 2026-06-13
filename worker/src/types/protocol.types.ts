@@ -75,6 +75,7 @@ export interface AssignJobMessage {
   title: string;
   channelId: string;
   maxDurationSeconds: number;
+  uploadProxyUrl: string;
   azuracast: {
     baseUrl: string;
     apiKey: string;

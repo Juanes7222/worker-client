@@ -157,7 +157,7 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     localPath = await downloadAsMp3(videoId, url);
 
     reportStatus(jobId, "UPLOADING");
-    const { fileId, azuraPath } = await uploadToAzuracast(localPath, azuracast);
+    const { fileId, azuraPath } = await uploadToAzuracast(localPath, job.uploadProxyUrl, job.title);
 
     deleteFile(localPath);
     localPath = null;

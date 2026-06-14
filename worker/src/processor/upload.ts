@@ -40,13 +40,36 @@ export async function uploadToAzuracast(
   workerSecret: string
 ): Promise<UploadResult> {
   const filename = path.basename(localPath);
+  const fileStats = fs.statSync(localPath);
 
-  logger.info("Upload", "Uploading via backend proxy", { filename, jobId, url: uploadProxyUrl });
+  logger.info("Upload", "Uploading via backend proxy", {
+    filename,
+    jobId,
+    url: uploadProxyUrl,
+    size: fileStats.size,
+  });
+
+  const titleBuffer = Buffer.from(title, "utf8");
+  const jobIdBuffer = Buffer.from(jobId, "utf8");
 
   const form = new FormData();
-  form.append("file", fs.createReadStream(localPath), { filename });
-  form.append("title", title);
-  form.append("jobId", jobId);
+  form.append("file", fs.createReadStream(localPath), {
+    filename,
+    knownLength: fileStats.size,
+  });
+  form.append("title", titleBuffer, {
+    filename: "title.txt",
+    contentType: "text/plain",
+    knownLength: titleBuffer.length,
+  });
+  form.append("jobId", jobIdBuffer, {
+    filename: "jobId.txt",
+    contentType: "text/plain",
+    knownLength: jobIdBuffer.length,
+  });
+
+  const formHeaders = form.getHeaders();
+  logger.info("Upload", "Request headers", { formHeaders, contentLength: formHeaders["content-length"] });
 
   const url = new URL(uploadProxyUrl);
   const isHttps = url.protocol === "https:";
@@ -60,26 +83,32 @@ export async function uploadToAzuracast(
     headers: {
       "X-Worker-Secret": workerSecret,
       "X-Job-Id": jobId,
-      ...form.getHeaders(),
+      ...formHeaders,
     },
   };
 
   const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
     const request = isHttps ? https.request(requestOptions) : http.request(requestOptions);
+    let settled = false;
+
+    function onError(err: Error): void {
+      if (settled) return;
+      settled = true;
+      request.destroy();
+      reject(err);
+    }
 
     request.setTimeout(600_000, () => {
-      request.destroy();
-      reject(new Error("Upload request timed out after 600 seconds"));
+      onError(new Error("Upload request timed out after 600 seconds"));
     });
 
-    request.on("error", (err) => {
-      reject(err);
-    });
-
+    request.on("error", (err) => onError(err));
     request.on("response", (response) => {
+      settled = true;
       resolve(response);
     });
 
+    form.on("error", (err) => onError(err));
     form.pipe(request);
   });
 

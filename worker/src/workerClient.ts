@@ -120,6 +120,59 @@ function reportStatus(jobId: string, status: string): void {
   send({ type: "job_status", workerId: config.workerId, jobId, status });
 }
 
+const UPLOAD_MAX_RETRIES = 5;
+const UPLOAD_RETRY_DELAY_BASE_MS = 5_000;
+const UPLOAD_RETRY_DELAY_MAX_MS = 120_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function uploadWithRetries(
+  localPath: string,
+  uploadProxyUrl: string,
+  jobId: string,
+  title: string,
+  workerSecret: string
+): Promise<{ fileId: string; azuraPath: string; accepted: boolean }> {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
+    try {
+      const result = await uploadToAzuracast(localPath, uploadProxyUrl, jobId, title, workerSecret);
+      if (attempt > 1) {
+        logger.info("Upload", "Upload succeeded after retry", { attempt });
+      }
+      return result;
+    } catch (err) {
+      lastError = err;
+      const isLastAttempt = attempt === UPLOAD_MAX_RETRIES;
+      const isRetryable = err instanceof UploadError ? err.retryable : true;
+
+      logger.warn("Upload", "Upload attempt failed", {
+        attempt,
+        maxRetries: UPLOAD_MAX_RETRIES,
+        error: String(err),
+        retryable: isRetryable,
+        willRetry: !isLastAttempt && isRetryable,
+      });
+
+      if (isLastAttempt || !isRetryable) {
+        throw err;
+      }
+
+      const delay = Math.min(
+        UPLOAD_RETRY_DELAY_BASE_MS * 2 ** (attempt - 1),
+        UPLOAD_RETRY_DELAY_MAX_MS
+      );
+      logger.info("Upload", "Waiting before retry", { delayMs: delay, nextAttempt: attempt + 1 });
+      await sleep(delay);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
 async function handleJob(job: AssignJobMessage): Promise<void> {
   const { jobId, videoId, url, azuracast } = job;
 
@@ -157,7 +210,13 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
     localPath = await downloadAsMp3(videoId, url);
 
     reportStatus(jobId, "UPLOADING");
-    const { fileId, azuraPath } = await uploadToAzuracast(localPath, job.uploadProxyUrl, job.title, config.workerSecret);
+    const { fileId, azuraPath } = await uploadWithRetries(
+      localPath,
+      job.uploadProxyUrl,
+      jobId,
+      job.title,
+      config.workerSecret
+    );
 
     deleteFile(localPath);
     localPath = null;

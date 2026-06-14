@@ -1,12 +1,15 @@
 import fs from "fs";
 import path from "path";
+import http from "http";
+import https from "https";
+import { URL } from "url";
 import FormData from "form-data";
-import fetch from "node-fetch";
 import { logger } from "../logger";
 
 export interface UploadResult {
   fileId: string;
   azuraPath: string;
+  accepted: boolean;
 }
 
 export class UploadError extends Error {
@@ -20,47 +23,85 @@ export class UploadError extends Error {
   }
 }
 
+function collectResponseBody(res: http.IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    res.on("data", (chunk) => chunks.push(chunk));
+    res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    res.on("error", (err) => reject(err));
+  });
+}
+
 export async function uploadToAzuracast(
   localPath: string,
   uploadProxyUrl: string,
+  jobId: string,
   title: string,
   workerSecret: string
 ): Promise<UploadResult> {
   const filename = path.basename(localPath);
 
-  logger.info("Upload", "Uploading via backend proxy", { filename, url: uploadProxyUrl });
+  logger.info("Upload", "Uploading via backend proxy", { filename, jobId, url: uploadProxyUrl });
 
   const form = new FormData();
   form.append("file", fs.createReadStream(localPath), { filename });
   form.append("title", title);
+  form.append("jobId", jobId);
 
-  let response: Awaited<ReturnType<typeof fetch>>;
+  const url = new URL(uploadProxyUrl);
+  const isHttps = url.protocol === "https:";
 
-  try {
-    response = await fetch(uploadProxyUrl, {
-      method: "POST",
-      headers: {
-        "X-Worker-Secret": workerSecret,
-      },
-      body: form,
-      signal: AbortSignal.timeout(300_000),
+  const requestOptions: http.RequestOptions = {
+    protocol: url.protocol,
+    hostname: url.hostname,
+    port: url.port || (isHttps ? 443 : 80),
+    path: url.pathname + url.search,
+    method: "POST",
+    headers: {
+      "X-Worker-Secret": workerSecret,
+      "X-Job-Id": jobId,
+      ...form.getHeaders(),
+    },
+  };
+
+  const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
+    const request = isHttps ? https.request(requestOptions) : http.request(requestOptions);
+
+    request.setTimeout(600_000, () => {
+      request.destroy();
+      reject(new Error("Upload request timed out after 600 seconds"));
     });
-  } catch (err) {
-    const msg = String(err);
-    logger.error("Upload", "Network error during proxy upload", { error: msg });
-    throw new UploadError(`Network error: ${msg}`, 0, true);
+
+    request.on("error", (err) => {
+      reject(err);
+    });
+
+    request.on("response", (response) => {
+      resolve(response);
+    });
+
+    form.pipe(request);
+  });
+
+  const body = await collectResponseBody(res);
+
+  if (res.statusCode !== 200 && res.statusCode !== 202) {
+    const msg = `Proxy upload failed [${res.statusCode}]: ${body}`;
+    logger.error("Upload", msg, { status: res.statusCode });
+    const isRetryable =
+      res.statusCode === undefined ||
+      res.statusCode >= 500 ||
+      res.statusCode === 408 ||
+      res.statusCode === 429;
+    throw new UploadError(msg, res.statusCode ?? 0, isRetryable);
   }
 
-  if (!response.ok) {
-    const body = await response.text();
-    const msg = `Proxy upload failed [${response.status}]: ${body}`;
-    logger.error("Upload", msg, { status: response.status });
-    const isRetryable = response.status >= 500 || response.status === 408 || response.status === 429;
-    throw new UploadError(msg, response.status, isRetryable);
+  if (res.statusCode === 202) {
+    logger.info("Upload", "Upload accepted by backend (background processing)", { jobId });
+    return { fileId: "", azuraPath: "", accepted: true };
   }
 
-  const data = (await response.json()) as { fileId: string; azuraPath: string };
-
-  logger.info("Upload", "Upload complete via proxy", { fileId: data.fileId, azuraPath: data.azuraPath });
-  return { fileId: String(data.fileId), azuraPath: data.azuraPath };
+  const data = JSON.parse(body) as { fileId: string; azuraPath: string };
+  logger.info("Upload", "Upload complete via proxy", { jobId, fileId: data.fileId, azuraPath: data.azuraPath });
+  return { fileId: String(data.fileId), azuraPath: data.azuraPath, accepted: false };
 }

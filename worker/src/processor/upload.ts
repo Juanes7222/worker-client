@@ -1,9 +1,7 @@
 import fs from "fs";
 import path from "path";
-import http from "http";
-import https from "https";
-import { URL } from "url";
 import FormData from "form-data";
+import axios, { AxiosError } from "axios";
 import { logger } from "../logger";
 
 export interface UploadResult {
@@ -23,15 +21,6 @@ export class UploadError extends Error {
   }
 }
 
-function collectResponseBody(res: http.IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    res.on("data", (chunk) => chunks.push(chunk));
-    res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-    res.on("error", (err) => reject(err));
-  });
-}
-
 export async function uploadToAzuracast(
   localPath: string,
   uploadProxyUrl: string,
@@ -40,97 +29,59 @@ export async function uploadToAzuracast(
   workerSecret: string
 ): Promise<UploadResult> {
   const filename = path.basename(localPath);
-  const fileStats = fs.statSync(localPath);
+  const fileBuffer = fs.readFileSync(localPath);
+  const titleBuffer = Buffer.from(title, "utf8");
+  const jobIdBuffer = Buffer.from(jobId, "utf8");
 
   logger.info("Upload", "Uploading via backend proxy", {
     filename,
     jobId,
     url: uploadProxyUrl,
-    size: fileStats.size,
+    size: fileBuffer.length,
   });
-
-  const titleBuffer = Buffer.from(title, "utf8");
-  const jobIdBuffer = Buffer.from(jobId, "utf8");
 
   const form = new FormData();
-  form.append("file", fs.createReadStream(localPath), {
+  form.append("file", fileBuffer, {
     filename,
-    knownLength: fileStats.size,
+    contentType: "audio/mpeg",
+    knownLength: fileBuffer.length,
   });
-  form.append("title", titleBuffer, {
-    filename: "title.txt",
-    contentType: "text/plain",
-    knownLength: titleBuffer.length,
-  });
-  form.append("jobId", jobIdBuffer, {
-    filename: "jobId.txt",
-    contentType: "text/plain",
-    knownLength: jobIdBuffer.length,
-  });
+  form.append("title", titleBuffer);
+  form.append("jobId", jobIdBuffer);
 
-  const formHeaders = form.getHeaders();
-  logger.info("Upload", "Request headers", { formHeaders, contentLength: formHeaders["content-length"] });
+  const contentLength = form.getLengthSync();
+  logger.info("Upload", "Request headers", { contentLength });
 
-  const url = new URL(uploadProxyUrl);
-  const isHttps = url.protocol === "https:";
+  try {
+    const response = await axios.post(uploadProxyUrl, form, {
+      headers: {
+        "X-Worker-Secret": workerSecret,
+        "X-Job-Id": jobId,
+        ...form.getHeaders(),
+        "content-length": contentLength,
+      },
+      timeout: 600_000,
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity,
+    });
 
-  const requestOptions: http.RequestOptions = {
-    protocol: url.protocol,
-    hostname: url.hostname,
-    port: url.port || (isHttps ? 443 : 80),
-    path: url.pathname + url.search,
-    method: "POST",
-    headers: {
-      "X-Worker-Secret": workerSecret,
-      "X-Job-Id": jobId,
-      ...formHeaders,
-    },
-  };
-
-  const res = await new Promise<http.IncomingMessage>((resolve, reject) => {
-    const request = isHttps ? https.request(requestOptions) : http.request(requestOptions);
-    let settled = false;
-
-    function onError(err: Error): void {
-      if (settled) return;
-      settled = true;
-      request.destroy();
-      reject(err);
+    if (response.status === 202) {
+      logger.info("Upload", "Upload accepted by backend (background processing)", { jobId });
+      return { fileId: "", azuraPath: "", accepted: true };
     }
 
-    request.setTimeout(600_000, () => {
-      onError(new Error("Upload request timed out after 600 seconds"));
-    });
+    const data = response.data as { fileId: string; azuraPath: string };
+    logger.info("Upload", "Upload complete via proxy", { jobId, fileId: data.fileId });
+    return { fileId: String(data.fileId), azuraPath: data.azuraPath, accepted: false };
 
-    request.on("error", (err) => onError(err));
-    request.on("response", (response) => {
-      settled = true;
-      resolve(response);
-    });
-
-    form.on("error", (err) => onError(err));
-    form.pipe(request);
-  });
-
-  const body = await collectResponseBody(res);
-
-  if (res.statusCode !== 200 && res.statusCode !== 202) {
-    const msg = `Proxy upload failed [${res.statusCode}]: ${body}`;
-    logger.error("Upload", msg, { status: res.statusCode });
-    const isRetryable =
-      res.statusCode === undefined ||
-      res.statusCode >= 500 ||
-      res.statusCode === 408 ||
-      res.statusCode === 429;
-    throw new UploadError(msg, res.statusCode ?? 0, isRetryable);
+  } catch (err) {
+    if (err instanceof AxiosError && err.response) {
+      const status = err.response.status;
+      const msg = `Proxy upload failed [${status}]: ${JSON.stringify(err.response.data)}`;
+      logger.error("Upload", msg, { status });
+      const isRetryable = status >= 500 || status === 408 || status === 429;
+      throw new UploadError(msg, status, isRetryable);
+    }
+    throw err;
   }
-
-  if (res.statusCode === 202) {
-    logger.info("Upload", "Upload accepted by backend (background processing)", { jobId });
-    return { fileId: "", azuraPath: "", accepted: true };
-  }
-
-  const data = JSON.parse(body) as { fileId: string; azuraPath: string };
-  logger.info("Upload", "Upload complete via proxy", { jobId, fileId: data.fileId, azuraPath: data.azuraPath });
-  return { fileId: String(data.fileId), azuraPath: data.azuraPath, accepted: false };
 }

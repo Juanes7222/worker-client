@@ -7,8 +7,6 @@ import { logger } from "../logger";
 
 const execFileAsync = promisify(execFile);
 
-// Uses the portable yt-dlp binary path from config when available,
-// falling back to system PATH for local development.
 const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
 const FFMPEG = process.env.FFMPEG_BIN ?? "ffmpeg";
 const DENO = process.env.DENO_BIN ?? "deno";
@@ -30,9 +28,9 @@ function ensureTempDir(): void {
 export async function downloadAsMp3(videoId: string, url: string): Promise<string> {
   ensureTempDir();
 
-  // The filename will be based on the video title.
-  // yt-dlp sanitizes invalid characters for the OS.
-  const outputTemplate = path.join(config.tempDir, "%(title).200s.%(ext)s");
+  // Use a fixed, ASCII-safe filename to avoid Windows path encoding issues
+  // with titles containing accented characters or special symbols.
+  const outputTemplate = path.join(config.tempDir, `${videoId}.%(ext)s`);
 
   logger.info("Download", "Starting download", { videoId, bin: YTDLP });
 
@@ -48,7 +46,6 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     "--no-progress",
     "--quiet",
     "--no-warnings",
-    ...(process.platform === "win32" ? ["--windows-filenames"] : []),
     "-o", outputTemplate,
     url,
   ];
@@ -68,10 +65,14 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     );
   }
 
-  const finalPath = lastNonEmptyLine(stdout);
-  if (!finalPath) {
-    throw new Error(`yt-dlp did not return the final filepath for ${videoId}`);
-  }
+  const reportedPath = lastNonEmptyLine(stdout);
+  const expectedPath = path.join(config.tempDir, `${videoId}.mp3`);
+
+  // Prefer the path yt-dlp reported; fall back to the expected path if
+  // stdout was empty or the reported path doesn't exist (encoding edge cases).
+  const finalPath = (reportedPath && fs.existsSync(reportedPath))
+    ? reportedPath
+    : expectedPath;
 
   if (!fs.existsSync(finalPath)) {
     throw new Error(`MP3 not found after download: ${finalPath}`);

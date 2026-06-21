@@ -91,7 +91,44 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     size: stats.size,
   });
 
+  await ensureUtf8Metadata(finalPath, videoId);
+
   return finalPath;
+}
+
+async function ensureUtf8Metadata(filePath: string, videoId: string): Promise<void> {
+  const tempPath = path.join(
+    path.dirname(filePath),
+    `${videoId}.utf8.mp3`
+  );
+
+  try {
+    await execFileAsync(FFMPEG, [
+      "-i", filePath,
+      "-c", "copy",
+      "-map_metadata", "0",
+      "-id3v2_version", "4",
+      "-y",
+      tempPath,
+    ], { timeout: 60_000 });
+
+    const tempStats = fs.statSync(tempPath);
+    if (tempStats.size < 1024) {
+      fs.unlinkSync(tempPath);
+      return;
+    }
+
+    fs.renameSync(tempPath, filePath);
+    logger.info("Download", "ID3 tags re-encoded to UTF-8", { videoId });
+  } catch (err) {
+    if (fs.existsSync(tempPath)) {
+      fs.unlinkSync(tempPath);
+    }
+    logger.warn("Download", "Failed to re-encode ID3 tags, using original file", {
+      videoId,
+      error: String(err),
+    });
+  }
 }
 
 export function deleteFile(filePath: string): void {

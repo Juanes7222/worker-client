@@ -41,8 +41,14 @@ export async function uploadToAzuracast(
   });
 
   const form = new FormData();
-  form.append("title", title);
-  form.append("jobId", jobId);
+  form.append("title", titleBuffer, {
+    contentType: "text/plain; charset=utf-8",
+    knownLength: titleBuffer.length,
+  });
+  form.append("jobId", jobIdBuffer, {
+    contentType: "text/plain; charset=utf-8",
+    knownLength: jobIdBuffer.length,
+  });
   form.append("file", fileBuffer, {
     filename,
     contentType: "audio/mpeg",

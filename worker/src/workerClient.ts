@@ -133,13 +133,14 @@ async function uploadWithRetries(
   uploadProxyUrl: string,
   jobId: string,
   title: string,
+  artist: string,
   workerSecret: string
 ): Promise<{ fileId: string; azuraPath: string; accepted: boolean }> {
   let lastError: unknown = null;
 
   for (let attempt = 1; attempt <= UPLOAD_MAX_RETRIES; attempt++) {
     try {
-      const result = await uploadToAzuracast(localPath, uploadProxyUrl, jobId, title, workerSecret);
+      const result = await uploadToAzuracast(localPath, uploadProxyUrl, jobId, title, artist, workerSecret);
       if (attempt > 1) {
         logger.info("Upload", "Upload succeeded after retry", { attempt });
       }
@@ -215,6 +216,7 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
       job.uploadProxyUrl,
       jobId,
       job.title,
+      meta.artist,
       config.workerSecret
     );
 

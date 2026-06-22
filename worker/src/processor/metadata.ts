@@ -8,6 +8,7 @@ export interface VideoMeta {
   duration: number;
   title: string;
   available: boolean;
+  artist: string;
 }
 
 export async function fetchMetadata(url: string): Promise<VideoMeta> {
@@ -18,7 +19,12 @@ export async function fetchMetadata(url: string): Promise<VideoMeta> {
       { timeout: 30_000 }
     );
     const data = JSON.parse(stdout);
-    return { duration: data.duration ?? 0, title: data.title ?? "", available: true };
+    return {
+      duration: data.duration ?? 0,
+      title: data.title ?? "",
+      available: true,
+      artist: data.artist ?? data.channel ?? data.uploader ?? "",
+    };
   } catch (err) {
     throw new Error(`Metadata fetch failed: ${String(err)}`);
   }

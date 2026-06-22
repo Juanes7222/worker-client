@@ -26,11 +26,13 @@ export async function uploadToAzuracast(
   uploadProxyUrl: string,
   jobId: string,
   title: string,
+  artist: string,
   workerSecret: string
 ): Promise<UploadResult> {
   const filename = path.basename(localPath);
   const fileBuffer = fs.readFileSync(localPath);
   const titleBuffer = Buffer.from(title, "utf8");
+  const artistBuffer = Buffer.from(artist, "utf8");
   const jobIdBuffer = Buffer.from(jobId, "utf8");
 
   logger.info("Upload", "Uploading via backend proxy", {
@@ -44,6 +46,10 @@ export async function uploadToAzuracast(
   form.append("title", titleBuffer, {
     contentType: "text/plain; charset=utf-8",
     knownLength: titleBuffer.length,
+  });
+  form.append("artist", artistBuffer, {
+    contentType: "text/plain; charset=utf-8",
+    knownLength: artistBuffer.length,
   });
   form.append("jobId", jobIdBuffer, {
     contentType: "text/plain; charset=utf-8",

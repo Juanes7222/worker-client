@@ -7,7 +7,27 @@ import unzipper from "unzipper";
 import { config } from "./config";
 import { logger } from "./logger";
 
-const INSTALL_DIR = path.resolve(__dirname, "..", "..");
+function resolveInstallDir(): string {
+  // Intenta localizar el directorio que contiene bins/ o version.txt (instalación real).
+  // Cubre: dist/main.js -> .., src/updater.ts -> ../.., main.js en raíz -> ., y cwd/execPath.
+  const candidates = [
+    path.resolve(__dirname, ".."), // dist -> install
+    __dirname, // main.js en raíz
+    path.resolve(__dirname, "..", ".."), // src -> worker
+    process.cwd(),
+    path.dirname(process.execPath),
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(path.join(c, "bins")) || fs.existsSync(path.join(c, "version.txt"))) return c;
+    } catch {}
+  }
+  // Fallback heurístico por nombre de carpeta
+  if (__dirname.endsWith("dist") || __dirname.endsWith("src")) return path.resolve(__dirname, "..");
+  return __dirname;
+}
+
+const INSTALL_DIR = resolveInstallDir();
 const PENDING_ZIP = path.join(INSTALL_DIR, ".pending.zip");
 const PENDING_DIR = path.join(INSTALL_DIR, ".pending");
 
@@ -84,6 +104,20 @@ export async function applyUpdate(zipPath: string, version?: string): Promise<vo
   for (const entry of fs.readdirSync(PENDING_DIR)) {
     const src = path.join(PENDING_DIR, entry);
     const dest = path.join(INSTALL_DIR, entry);
+    // bins solo se actualiza si el ZIP lo trae explícitamente; si lo trae, hacer merge para no borrar WinSW/yt-dlp
+    if (entry === "bins" && fs.existsSync(dest) && fs.existsSync(src)) {
+      const srcStat = fs.statSync(src);
+      const destStat = fs.statSync(dest);
+      if (srcStat.isDirectory() && destStat.isDirectory()) {
+        for (const binFile of fs.readdirSync(src)) {
+          const binSrc = path.join(src, binFile);
+          const binDest = path.join(dest, binFile);
+          if (fs.existsSync(binDest)) fs.rmSync(binDest, { recursive: true, force: true });
+          fs.renameSync(binSrc, binDest);
+        }
+        continue;
+      }
+    }
     if (fs.existsSync(dest)) {
       fs.rmSync(dest, { recursive: true, force: true });
     }

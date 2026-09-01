@@ -5,10 +5,13 @@ import { fetchMetadata } from "./processor/metadata";
 import { downloadAsMp3, deleteFile } from "./processor/download";
 import { uploadToAzuracast, UploadError } from "./processor/upload";
 import { AssignJobMessage, WorkerMessage } from "./types/protocol.types";
+import { handleUpdateAvailable, getPendingUpdate, setPendingUpdate } from "./updater";
+import axios from "axios";
 
 let socket: WebSocket;
 let reconnectDelay = 3000;
 let heartbeatTimer: NodeJS.Timeout | null = null;
+let pollingTimer: NodeJS.Timeout | null = null;
 let activeJobs = 0;
 
 export function startWorkerClient(): void {
@@ -32,8 +35,10 @@ function connect(): void {
       secret: config.workerSecret,
       name: config.workerName,
       maxConcurrentJobs: config.maxConcurrentJobs,
-    });
+      version: config.version,
+    } as unknown as WorkerMessage);
     startHeartbeat();
+    startPolling();
   });
 
   socket.on("message", (raw) => {
@@ -63,6 +68,12 @@ function connect(): void {
         }
         void handleJob(message as unknown as AssignJobMessage);
         break;
+      case "update_available":
+        void handleUpdateAvailable(
+          message as unknown as { version: string; sha256: string; url: string },
+          () => activeJobs === 0
+        );
+        break;
       default:
         logger.warn("WorkerClient", "Unknown message type from server", { type });
     }
@@ -73,6 +84,10 @@ function connect(): void {
     if (heartbeatTimer) {
       clearInterval(heartbeatTimer);
       heartbeatTimer = null;
+    }
+    if (pollingTimer) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
     }
     setTimeout(connect, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
@@ -104,6 +119,32 @@ function startHeartbeat(): void {
       send(heartbeatMsg);
     }
   }, 20_000);
+}
+
+function startPolling(): void {
+  if (pollingTimer) clearInterval(pollingTimer);
+  pollingTimer = setInterval(async () => {
+    if (activeJobs > 0) return;
+    try {
+      const base = config.serverWsUrl.replace(/^ws/, "http").replace(/\/ws\/?$/, "");
+      const res = await axios.get(`${base}/workers/updates/latest`, {
+        headers: {
+          "x-worker-secret": config.workerSecret,
+          "x-worker-version": config.version,
+        },
+        validateStatus: (s) => s === 200 || s === 204,
+        timeout: 30_000,
+      });
+      if (res.status === 200 && res.data?.version) {
+        void handleUpdateAvailable(
+          { version: res.data.version, sha256: res.data.sha256, url: res.data.downloadUrl },
+          () => activeJobs === 0
+        );
+      }
+    } catch {
+      // ignore polling errors
+    }
+  }, 6 * 60 * 60 * 1000);
 }
 
 function send(message: WorkerMessage): void {
@@ -253,5 +294,12 @@ async function handleJob(job: AssignJobMessage): Promise<void> {
   } finally {
     activeJobs--;
     logger.info("WorkerClient", "Job finished", { jobId, activeJobs });
+    if (activeJobs === 0) {
+      const pending = getPendingUpdate();
+      if (pending) {
+        setPendingUpdate(null);
+        void handleUpdateAvailable(pending, () => true);
+      }
+    }
   }
 }

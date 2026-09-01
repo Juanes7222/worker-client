@@ -22,7 +22,20 @@ function optionalEnv(key: string, fallback: string): string {
   return process.env[key] ?? fallback;
 }
 
+let workerVersion = "0.0.0";
+try {
+  const versionFile = path.resolve(__dirname, "..", "..", "version.txt");
+  if (fs.existsSync(versionFile)) {
+    workerVersion = fs.readFileSync(versionFile, "utf8").trim() || workerVersion;
+  } else {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const pkg = require("../package.json") as { version?: string };
+    if (pkg.version) workerVersion = pkg.version;
+  }
+} catch {}
+
 export const config = {
+  version:            workerVersion,
   serverWsUrl:       requireEnv("SERVER_WS_URL"),
   workerId:          requireEnv("WORKER_ID"),
   workerSecret:      requireEnv("WORKER_SECRET"),

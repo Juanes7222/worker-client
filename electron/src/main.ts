@@ -235,6 +235,7 @@ function buildEnvironmentFileContent(config: WorkerConfig): string {
   const ytDlpBin = path.join(BINS_DIR, 'yt-dlp.exe');
   const ffmpegBin = path.join(BINS_DIR, 'ffmpeg.exe');
   const denoBin = path.join(BINS_DIR, 'deno.exe');
+  const cookiesPath = path.join(BINS_DIR, 'cookies.txt');
 
   return [
     `SERVER_WS_URL=${config.serverWsUrl}`,
@@ -248,6 +249,9 @@ function buildEnvironmentFileContent(config: WorkerConfig): string {
     `YTDLP_BIN=${ytDlpBin}`,
     `FFMPEG_BIN=${ffmpegBin}`,
     `DENO_BIN=${denoBin}`,
+    `YTDLP_COOKIES_PATH=${cookiesPath}`,
+    `YTDLP_AUTO_UPDATE=1`,
+    `YTDLP_AUTO_UPDATE_INTERVAL_MS=86400000`,
   ].join('\n');
 }
 

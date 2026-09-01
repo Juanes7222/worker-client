@@ -11,6 +11,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1124.0",
     "axios": "^1.18.0",
     "dotenv": "^16.4.5",
     "form-data": "^4.0.0",

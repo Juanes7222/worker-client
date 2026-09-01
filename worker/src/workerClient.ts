@@ -126,7 +126,12 @@ function startPolling(): void {
   pollingTimer = setInterval(async () => {
     if (activeJobs > 0) return;
     try {
-      const base = config.serverWsUrl.replace(/^ws/, "http").replace(/\/ws\/?$/, "");
+      let base: string;
+      try {
+        base = new URL(config.serverWsUrl).origin;
+      } catch {
+        base = config.serverWsUrl.replace(/^ws/, "http").replace(/\/.*$/, "");
+      }
       const res = await axios.get(`${base}/workers/updates/latest`, {
         headers: {
           "x-worker-secret": config.workerSecret,

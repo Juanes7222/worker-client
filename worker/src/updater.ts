@@ -22,7 +22,11 @@ export function getPendingUpdate(): { version: string; sha256: string; url: stri
 }
 
 function baseHttpUrl(): string {
-  return config.serverWsUrl.replace(/^ws/, "http").replace(/\/ws\/?$/, "");
+  try {
+    return new URL(config.serverWsUrl).origin;
+  } catch {
+    return config.serverWsUrl.replace(/^ws/, "http").replace(/\/.*$/, "");
+  }
 }
 
 export async function downloadAndVerify(url: string, expectedSha256: string): Promise<string> {

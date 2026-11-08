@@ -21,6 +21,24 @@ export class UploadError extends Error {
   }
 }
 
+const BODY_PREVIEW_LIMIT = 300;
+
+/**
+ * Express answers an unmatched route with a full HTML error page. Logging it raw
+ * buries the useful part of the failure, so the markup is flattened and capped.
+ */
+function describeBody(data: unknown): string {
+  const text = typeof data === "string" ? data : JSON.stringify(data ?? "");
+  const flattened = text
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return flattened.length > BODY_PREVIEW_LIMIT
+    ? `${flattened.slice(0, BODY_PREVIEW_LIMIT)}…`
+    : flattened;
+}
+
 export async function uploadToAzuracast(
   localPath: string,
   uploadProxyUrl: string,
@@ -75,6 +93,10 @@ export async function uploadToAzuracast(
       timeout: 600_000,
       maxContentLength: Infinity,
       maxBodyLength: Infinity,
+      // A 301/302 makes axios replay the request as a GET without the body, which
+      // the backend answers with "Cannot GET /admin-api/workers/upload" and the
+      // real reason stays invisible. Failing on the redirect names the cause.
+      maxRedirects: 0,
     });
 
     if (response.status === 202) {
@@ -89,7 +111,18 @@ export async function uploadToAzuracast(
   } catch (err) {
     if (err instanceof AxiosError && err.response) {
       const status = err.response.status;
-      const msg = `Proxy upload failed [${status}]: ${JSON.stringify(err.response.data)}`;
+      const location = err.response.headers?.location;
+
+      if (status >= 300 && status < 400) {
+        const msg =
+          `Proxy upload redirected [${status}] from ${uploadProxyUrl} to ${location ?? "unknown"}: ` +
+          "a POST cannot follow a redirect. Point PUBLIC_URL at the host that answers " +
+          "directly, without the www prefix.";
+        logger.error("Upload", msg, { status, location });
+        throw new UploadError(msg, status, false);
+      }
+
+      const msg = `Proxy upload failed [${status}]: ${describeBody(err.response.data)}`;
       logger.error("Upload", msg, { status });
       const isRetryable = status >= 500 || status === 408 || status === 429;
       throw new UploadError(msg, status, isRetryable);

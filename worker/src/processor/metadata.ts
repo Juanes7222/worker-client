@@ -1,40 +1,14 @@
 import { execFile } from "child_process";
 import { promisify } from "util";
-import fs from "fs";
-import path from "path";
 import { UploadError } from "./upload";
+import {
+  YTDLP_BIN,
+  ensureYtDlpReady,
+  getSharedYtDlpArgs,
+  refreshYtDlpAfterExtractionFailure,
+} from "./ytdlp";
 
 const execFileAsync = promisify(execFile);
-const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
-
-function findCookiesFile(): string | null {
-  const envPath = process.env.YTDLP_COOKIES_PATH ?? process.env.COOKIES_PATH;
-  if (envPath) {
-    const abs = path.isAbsolute(envPath) ? envPath : path.resolve(__dirname, envPath);
-    if (fs.existsSync(abs)) return abs;
-  }
-  // Worker runs as INSTALL_DIR/main.js -> INSTALL_DIR = dirname(tempDir) or dirname(__dirname)
-  // Try both to work in dev (src/) and production (INSTALL_DIR/)
-  const candidates: string[] = [];
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const cfg = require("../config").config as { tempDir: string };
-    const installDir = path.dirname(cfg.tempDir);
-    candidates.push(path.join(installDir, "cookies.txt"));
-    candidates.push(path.join(installDir, "bins", "cookies.txt"));
-  } catch {}
-  candidates.push(path.join(__dirname, "cookies.txt"));
-  candidates.push(path.join(__dirname, "..", "cookies.txt"));
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
-}
-
-function getYtDlpCookiesArgs(): string[] {
-  const p = findCookiesFile();
-  return p ? ["--cookies", p] : [];
-}
 
 export interface VideoMeta {
   duration: number;
@@ -90,15 +64,15 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function fetchMetadata(url: string): Promise<VideoMeta> {
+  await ensureYtDlpReady();
   await sleep(400 + Math.random() * 800);
+
   try {
     const { stdout } = await execFileAsync(
-      YTDLP,
+      YTDLP_BIN,
       [
         "--dump-json",
-        "--no-playlist",
-        "--extractor-args",
-        "youtube:player_client=android,web",
+        ...getSharedYtDlpArgs(),
         "--extractor-retries",
         "2",
         "--retry-sleep",
@@ -107,7 +81,6 @@ export async function fetchMetadata(url: string): Promise<VideoMeta> {
         "1",
         "--sleep-interval",
         "1",
-        ...getYtDlpCookiesArgs(),
         url,
       ],
       { timeout: 45_000, maxBuffer: 10 * 1024 * 1024 }
@@ -141,6 +114,7 @@ export async function fetchMetadata(url: string): Promise<VideoMeta> {
     if (err instanceof MetadataError) throw err;
     const raw = String(err);
     const retryable = classifyMetadataError(raw);
+    refreshYtDlpAfterExtractionFailure(raw, `metadata ${url}`);
     throw new MetadataError(`Metadata fetch failed: ${raw}`, retryable);
   }
 }

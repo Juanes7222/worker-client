@@ -55,6 +55,10 @@
       {
         "from": "../resources/bins/ffmpeg.exe",
         "to": "bins/ffmpeg.exe"
+      },
+      {
+        "from": "../resources/bins/deno.exe",
+        "to": "bins/deno.exe"
       }
     ],
     "win": {

@@ -5,12 +5,15 @@ import path from "path";
 import { config } from "../config";
 import { logger } from "../logger";
 import { UploadError } from "./upload";
+import {
+  FFMPEG_BIN,
+  YTDLP_BIN,
+  ensureYtDlpReady,
+  getSharedYtDlpArgs,
+  refreshYtDlpAfterExtractionFailure,
+} from "./ytdlp";
 
 const execFileAsync = promisify(execFile);
-
-const YTDLP = process.env.YTDLP_BIN ?? "yt-dlp";
-const FFMPEG = process.env.FFMPEG_BIN ?? "ffmpeg";
-const DENO = process.env.DENO_BIN ?? "deno";
 
 export class YtDlpError extends UploadError {
   constructor(message: string, retryable: boolean) {
@@ -18,63 +21,6 @@ export class YtDlpError extends UploadError {
     this.name = "YtDlpError";
   }
 }
-
-function findCookiesFile(): string | null {
-  // 1) Explicit env (portable: can be relative to INSTALL_DIR)
-  const envPath = process.env.YTDLP_COOKIES_PATH ?? process.env.COOKIES_PATH;
-  if (envPath) {
-    const abs = path.isAbsolute(envPath) ? envPath : path.resolve(__dirname, envPath);
-    if (fs.existsSync(abs)) return abs;
-  }
-  // 2) Fixed install layout: INSTALL_DIR/cookies.txt and INSTALL_DIR/bins/cookies.txt
-  // config.tempDir = INSTALL_DIR/temp -> INSTALL_DIR = dirname(tempDir)
-  const installDir = path.dirname(config.tempDir);
-  const candidates = [
-    path.join(installDir, "cookies.txt"),
-    path.join(installDir, "bins", "cookies.txt"),
-    path.join(__dirname, "cookies.txt"),
-    path.join(__dirname, "..", "cookies.txt"),
-  ];
-  for (const c of candidates) {
-    if (fs.existsSync(c)) return c;
-  }
-  return null;
-}
-
-function getYtDlpCookiesArgs(): string[] {
-  const p = findCookiesFile();
-  if (p) {
-    logger.info("YTDLP", "Using cookies file", { path: p });
-    return ["--cookies", p];
-  }
-  return [];
-}
-
-let ytDlpUpdateScheduled = false;
-function ensureYtDlpAutoUpdate(): void {
-  if (ytDlpUpdateScheduled) return;
-  if (process.env.YTDLP_AUTO_UPDATE === "0") return;
-  ytDlpUpdateScheduled = true;
-  const intervalMs = parseInt(process.env.YTDLP_AUTO_UPDATE_INTERVAL_MS ?? "86400000", 10);
-  const doUpdate = async () => {
-    try {
-      logger.info("YTDLP", "Checking for yt-dlp update", { bin: YTDLP });
-      await execFileAsync(YTDLP, ["--update"], { timeout: 120_000 });
-      logger.info("YTDLP", "yt-dlp update check finished");
-    } catch (err: any) {
-      const msg = String(err?.stderr ?? err?.message ?? err);
-      // --update not supported on nightly/portable builds -> not fatal
-      if (/unknown option|no update/i.test(msg)) {
-        logger.info("YTDLP", "yt-dlp --update not supported for this build", { msg });
-      } else {
-        logger.warn("YTDLP", "yt-dlp auto-update failed", { error: msg });
-      }
-    }
-  };
-  setTimeout(doUpdate, 30_000);
-  setInterval(doUpdate, intervalMs);
-}
-ensureYtDlpAutoUpdate();
 
 const NON_RETRYABLE_YTDLP_PATTERNS: RegExp[] = [
   /private video/i,
@@ -126,26 +72,26 @@ function sleep(ms: number): Promise<void> {
 }
 
 export async function downloadAsMp3(videoId: string, url: string): Promise<string> {
+  ensureTempDir();
+  await ensureYtDlpReady();
+
   // Throttle inter-job to avoid bot-detection burst (normal PCs hammering sequentially)
   const jitter = 800 + Math.random() * 1700;
   await sleep(jitter);
-  ensureTempDir();
 
   // Use a fixed, ASCII-safe filename to avoid Windows path encoding issues
   // with titles containing accented characters or special symbols.
   const outputTemplate = path.join(config.tempDir, `${videoId}.%(ext)s`);
 
-  logger.info("Download", "Starting download", { videoId, bin: YTDLP });
+  logger.info("Download", "Starting download", { videoId, bin: YTDLP_BIN });
 
   const args = [
-    "--no-playlist",
+    ...getSharedYtDlpArgs(),
     "-x",
     "--audio-format", "mp3",
     "--audio-quality", "0",
     "--embed-metadata",
-    "--ffmpeg-location", FFMPEG,
-    "--js-runtimes", `deno:${DENO}`,
-    "--extractor-args", "youtube:player_client=android,web",
+    "--ffmpeg-location", FFMPEG_BIN,
     "--extractor-retries", "3",
     "--fragment-retries", "3",
     "--retry-sleep", "2",
@@ -153,18 +99,16 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     "--sleep-requests", "1",
     "--sleep-interval", "2",
     "--max-sleep-interval", "5",
-    ...getYtDlpCookiesArgs(),
     "--print", "after_move:filepath",
     "--no-progress",
     "--quiet",
-    "--no-warnings",
     "-o", outputTemplate,
     url,
   ];
 
   let stdout = "";
   try {
-    const result = await execFileAsync(YTDLP, args, {
+    const result = await execFileAsync(YTDLP_BIN, args, {
       timeout: 300_000,
       maxBuffer: 10 * 1024 * 1024,
     });
@@ -174,6 +118,7 @@ export async function downloadAsMp3(videoId: string, url: string): Promise<strin
     const out = error?.stdout?.toString?.() ?? "";
     const raw = stderr || out || error?.message || "unknown error";
     const retryable = classifyDownloadError(raw);
+    refreshYtDlpAfterExtractionFailure(raw, `download ${videoId}`);
     throw new YtDlpError(`yt-dlp failed for ${videoId}: ${raw}`, retryable);
   }
 
@@ -215,7 +160,7 @@ async function ensureUtf8Metadata(filePath: string, videoId: string): Promise<vo
   );
 
   try {
-    await execFileAsync(FFMPEG, [
+    await execFileAsync(FFMPEG_BIN, [
       "-i", filePath,
       "-c", "copy",
       "-map_metadata", "0",
